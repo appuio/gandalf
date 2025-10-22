@@ -1,7 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"github.com/appuio/guided-setup/cmd"
+)
 
 func main() {
-	fmt.Println("Yer a wizard, Harry!")
+	cmd.Execute()
 }
