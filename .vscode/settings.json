@@ -1,0 +1,10 @@
+{
+  "gopls": {
+    "build.env": {
+      "GOEXPERIMENT": "jsonv2"
+    }
+  },
+  "go.testEnvVars": {
+    "GOEXPERIMENT": "jsonv2"
+  }
+}

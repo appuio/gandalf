@@ -1,0 +1,13 @@
+steps:
+- match: (?i)And create the bootstrap node
+  inputs:
+  - name: cloudplosion_org_id
+  - name: cluster_id
+  run: |
+    echo Waiting for bootstrap node to become ready
+    for i in {1..50}
+    do
+      sleep 0.1
+      printf .
+    done
+    echo "\rReady!                                  "

@@ -1,33 +1,41 @@
 package cmd
 
 import (
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/appuio/guided-setup/pkg/executor"
+	"github.com/appuio/guided-setup/pkg/steps"
 	"github.com/appuio/guided-setup/pkg/workflow"
+	"github.com/appuio/guided-setup/ui"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 )
 
 func init() {
 	RootCmd.AddCommand(NewRunCommand())
 }
 
+type runOptions struct {
+}
+
 func NewRunCommand() *cobra.Command {
+	ro := &runOptions{}
 	c := &cobra.Command{
-		Use:       "run WORKFLOW --steps path/to/steps",
-		Example:   "guided-setup run my-workflow --steps path/to/steps",
+		Use:       "run WORKFLOW steps...",
+		Example:   "guided-setup run my-workflow path/to/steps/*.yml",
 		Short:     "Runs the specified workflow.",
 		Long:      strings.Join([]string{}, " "),
-		ValidArgs: []string{"path"},
-		Args:      cobra.ExactArgs(1),
-		RunE:      runRun,
+		ValidArgs: []string{"path", "paths..."},
+		Args:      cobra.MinimumNArgs(2),
+		RunE:      ro.Run,
 	}
 	return c
 }
 
-func runRun(cmd *cobra.Command, args []string) error {
+func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	_ = cmd.Context()
 
 	rawWF, err := os.ReadFile(args[0])
@@ -40,10 +48,37 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to unmarshal workflow: %w", err)
 	}
 
-	executor := &executor.Executor{
-		Workflow: wf,
-		Steps:    steps,
+	collectedSteps := []steps.Step{}
+	for _, stepFile := range args[1:] {
+		rawStep, err := os.ReadFile(stepFile)
+		if err != nil {
+			return fmt.Errorf("failed to read step file %s: %w", stepFile, err)
+		}
+
+		jsonBytes, err := yaml.YAMLToJSON(rawStep)
+		if err != nil {
+			return fmt.Errorf("failed to convert step file %s from YAML to JSON: %w", stepFile, err)
+		}
+
+		parsedFile := &steps.StepsFile{}
+		if err := json.Unmarshal(jsonBytes, parsedFile); err != nil {
+			return fmt.Errorf("failed to unmarshal step file %s: %w", stepFile, err)
+		}
+		collectedSteps = append(collectedSteps, parsedFile.Steps...)
 	}
 
-	return executor.Run()
+	executor := &executor.Executor{
+		Workflow: wf,
+		Steps:    collectedSteps,
+	}
+
+	if err := executor.Prepare(); err != nil {
+		return fmt.Errorf("failed to prepare executor: %w", err)
+	}
+
+	if _, err := ui.NewUI(executor).Run(); err != nil {
+		return fmt.Errorf("failed to start UI: %w", err)
+	}
+
+	return nil
 }

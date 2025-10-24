@@ -10,8 +10,7 @@ type Workflow struct {
 // Currently a very minimal implementation that just splits by new lines, trims whitespace, and removes empty lines.
 func UnmarshalWorkflow(raw []byte) (Workflow, error) {
 	workflow := Workflow{}
-	rawParts := bytes.Split(raw, []byte("\n"))
-	for _, part := range rawParts {
+	for part := range bytes.Lines(raw) {
 		part := bytes.TrimSpace(part)
 		if len(part) == 0 {
 			continue
