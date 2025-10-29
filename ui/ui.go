@@ -68,15 +68,8 @@ type model struct {
 	program *tea.Program
 }
 
-type cmdRunCmd struct{}
-
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
-		func() tea.Msg {
-			return cmdRunCmd{}
-		},
-		m.spinner.Tick,
-	)
+	return m.spinner.Tick
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -96,6 +89,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// here.
 			m.viewport = viewport.New(msg.Width, m.calculateViewportHeight())
 			m.uiState = uiStateStep
+
+			var cmd tea.Cmd
+			m, cmd = m.runCmd()
+			cmds = append(cmds, cmd)
 		}
 	case uiStateInputOverlay:
 		// input overlay takes precedence
@@ -161,35 +158,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.viewport.SetContent("")
 				m.viewport.GotoTop()
-				cmds = append(cmds, func() tea.Msg {
-					return cmdRunCmd{}
-				})
+				var cmd tea.Cmd
+				m, cmd = m.runCmd()
+				cmds = append(cmds, cmd)
 			}
 			if k == "e" && m.cmdFinished {
 				m.varSelectIdx = ""
 				m.uiState = uiStateVarSelectMode
 			}
-		case cmdRunCmd:
-			m.cmdFinished = false
-			m.cmdErr = nil
-			if m.cmdOutput == nil {
-				m.cmdOutput = &strings.Builder{}
-			}
-			m.cmdOutput.Reset()
-			m.viewport.SetContent("")
-			m.viewport.GotoTop()
-
-			cmd, err := m.executor.CurrentStepCmd(context.Background())
-			if err != nil {
-				panic(err)
-			}
-			ce := &cmdExec{
-				cmd:        cmd,
-				notifyProg: m.program,
-			}
-			cmds = append(cmds, func() tea.Msg {
-				return cmdFinished{err: ce.Run()}
-			})
 		case cmdOutput:
 			m.cmdOutput.Write(msg.data)
 			m.viewport.SetContent(m.cmdOutput.String())
@@ -218,6 +194,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m model) runCmd() (model, tea.Cmd) {
+	m.cmdFinished = false
+	m.cmdErr = nil
+	if m.cmdOutput == nil {
+		m.cmdOutput = &strings.Builder{}
+	}
+	m.cmdOutput.Reset()
+	m.viewport.SetContent("")
+	m.viewport.GotoTop()
+
+	cmd, err := m.executor.CurrentStepCmd(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	ce := &cmdExec{
+		cmd:        cmd,
+		notifyProg: m.program,
+	}
+
+	return m, func() tea.Msg {
+		return cmdFinished{err: ce.Run()}
+	}
 }
 
 func (m model) View() string {
