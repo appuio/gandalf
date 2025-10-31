@@ -27,5 +27,5 @@ func (m varInputModel) Update(msg tea.Msg) (varInputModel, tea.Cmd) {
 }
 
 func (m varInputModel) View() string {
-	return "Variable Input Overlay: " + m.varName + "\n\n" + m.textInput.View()
+	return "Editing variable: " + m.varName + "\n\n" + m.textInput.View()
 }

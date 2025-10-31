@@ -1,11 +1,11 @@
 steps:
-- match: (?:Then |)I upload the kubernetes "(?P<name>[^"]+)" image
+- match: (?:Then |)I upload the kubernetes "(?P<image_name>[^"]+)" image
   inputs:
   - name: cloudplosion_org_id
   outputs:
   - name: image_id
   run: |
-    echo Uploading
+    echo Uploading image "$MATCH_image_name"
     sleep 0.7
     printf .
     sleep 0.7

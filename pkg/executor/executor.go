@@ -14,6 +14,11 @@ import (
 	"github.com/appuio/guided-setup/pkg/workflow"
 )
 
+type Step struct {
+	MatchedStep  steps.Step
+	NamedMatches map[string]string
+}
+
 type Executor struct {
 	Workflow workflow.Workflow
 
@@ -22,12 +27,12 @@ type Executor struct {
 
 	CapturedOutputs map[string]string
 
-	preparedMatches map[string]steps.Step
+	preparedMatches map[string]Step
 }
 
 func (e *Executor) Prepare() error {
 	e.CapturedOutputs = make(map[string]string)
-	e.preparedMatches = make(map[string]steps.Step)
+	e.preparedMatches = make(map[string]Step)
 
 	for _, wfStep := range e.Workflow.Steps {
 		err := e.matchStep(wfStep)
@@ -40,10 +45,20 @@ func (e *Executor) Prepare() error {
 }
 
 func (e *Executor) matchStep(wfStep string) error {
-	var matchedSteps []steps.Step
+	var matchedSteps []Step
 	for _, step := range e.Steps {
-		if step.Match.MatchString(wfStep) {
-			matchedSteps = append(matchedSteps, step)
+
+		if match := step.Match.FindStringSubmatch(wfStep); len(match) > 0 {
+			namedMatches := make(map[string]string)
+			for i, name := range step.Match.SubexpNames() {
+				if i != 0 {
+					namedMatches[name] = match[i]
+				}
+			}
+			matchedSteps = append(matchedSteps, Step{
+				MatchedStep:  step,
+				NamedMatches: namedMatches,
+			})
 		}
 	}
 
@@ -63,14 +78,53 @@ func (e *Executor) matchStep(wfStep string) error {
 	return nil
 }
 
-func (e *Executor) CurrentStep() (i int, name string, matchedStep steps.Step, err error) {
+func (e *Executor) CurrentStep() (i int, name string, matchedStep Step, err error) {
 	currentWFStep := e.Workflow.Steps[e.currentStepIndex]
 	matchedStep, ok := e.preparedMatches[currentWFStep]
 	if !ok {
-		return 0, "", steps.Step{}, fmt.Errorf("step %q not prepared", currentWFStep)
+		return 0, "", Step{}, fmt.Errorf("step %q not prepared", currentWFStep)
 	}
 
 	return e.currentStepIndex, currentWFStep, matchedStep, nil
+}
+
+func (e *Executor) NextStep() (i int, name string, matchedStep Step, err error) {
+	if e.currentStepIndex+1 >= len(e.Workflow.Steps) {
+		return 0, "", Step{}, io.EOF
+	}
+	e.currentStepIndex++
+	return e.CurrentStep()
+}
+
+func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
+	_, _, matchedStep, err := e.CurrentStep()
+	if err != nil {
+		return nil, err
+	}
+
+	script := matchedStep.MatchedStep.Run
+	if script == "" {
+		script = ":"
+	}
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	for _, input := range matchedStep.MatchedStep.Inputs {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("INPUT_%s=%s", input.Name, e.CapturedOutputs[input.Name]))
+	}
+	for k, v := range matchedStep.NamedMatches {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("MATCH_%s=%s", k, v))
+	}
+	outputDir, err := os.MkdirTemp(".", "outputs-")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create outputs dir: %w", err)
+	}
+	outputFile := outputDir + "/outputs.env"
+	cmd.Env = append(cmd.Env, fmt.Sprintf("OUTPUT=%s", outputFile))
+	return &Cmd{
+		Cmd:        cmd,
+		OutputFile: outputFile,
+		outputs:    &e.CapturedOutputs,
+	}, nil
 }
 
 type Cmd struct {
@@ -110,40 +164,4 @@ func (c *Cmd) Wait() error {
 
 	maps.Copy(*c.outputs, state)
 	return os.RemoveAll(filepath.Dir(c.OutputFile))
-}
-
-func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
-	_, _, matchedStep, err := e.CurrentStep()
-	if err != nil {
-		return nil, err
-	}
-
-	script := matchedStep.Run
-	if script == "" {
-		script = ":"
-	}
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", script)
-	for _, input := range matchedStep.Inputs {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("INPUT_%s=%s", input.Name, input.Name)) // TODO: provide actual input values
-	}
-	outputDir, err := os.MkdirTemp(".", "ouputs-")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create outputs dir: %w", err)
-	}
-	outputFile := outputDir + "/outputs.env"
-	cmd.Env = append(cmd.Env, fmt.Sprintf("OUTPUT=%s", outputFile))
-	return &Cmd{
-		Cmd:        cmd,
-		OutputFile: outputFile,
-		outputs:    &e.CapturedOutputs,
-	}, nil
-}
-
-func (e *Executor) NextStep() (i int, name string, matchedStep steps.Step, err error) {
-	if e.currentStepIndex+1 >= len(e.Workflow.Steps) {
-		return 0, "", steps.Step{}, io.EOF
-	}
-	e.currentStepIndex++
-	return e.CurrentStep()
 }

@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/appuio/guided-setup/pkg/executor"
-	"github.com/appuio/guided-setup/pkg/steps"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,20 +45,28 @@ const (
 	uiStateVarSelectMode uiState = "varSelectMode"
 )
 
+type cmdState string
+
+const (
+	cmdStateIdle     cmdState = ""
+	cmdStateRunning  cmdState = "running"
+	cmdStateFinished cmdState = "finished"
+)
+
 type model struct {
 	uiState uiState
 
 	executor *executor.Executor
 
-	cmdFinished bool
-	cmdErr      error
-	cmdOutput   *strings.Builder
+	cmdState  cmdState
+	cmdErr    error
+	cmdOutput *strings.Builder
 
 	varSelectIdx string
 
 	overlayVarInput varInputModel
 
-	viewport viewport.Model
+	cmdOuputViewport viewport.Model
 
 	height int
 	width  int
@@ -75,6 +83,12 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Handle window resizes first and always to get the latest dimensions for all subsequent updates
+	if msg, isSizeMsg := msg.(tea.WindowSizeMsg); isSizeMsg && m.uiState != uiStateInitializing {
+		m.height = msg.Height
+		m.width = msg.Width
+	}
+
 	switch m.uiState {
 	case uiStateInitializing:
 		switch msg := msg.(type) {
@@ -87,12 +101,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// we can initialize the viewport. The initial dimensions come in
 			// quickly, though asynchronously, which is why we wait for them
 			// here.
-			m.viewport = viewport.New(msg.Width, m.calculateViewportHeight())
+			m.cmdOuputViewport = viewport.New(msg.Width, m.calculateViewportHeight())
 			m.uiState = uiStateStep
-
-			var cmd tea.Cmd
-			m, cmd = m.runCmd()
-			cmds = append(cmds, cmd)
 		}
 	case uiStateInputOverlay:
 		// input overlay takes precedence
@@ -118,14 +128,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(k) == 1 && k[0] >= '0' && k[0] <= '9' {
 				m.varSelectIdx += k
 			}
-			if k == "esc" {
+			if k == "esc" || k == "e" {
 				m.uiState = uiStateStep
 				m.varSelectIdx = ""
 			}
 			if k == "enter" && m.varSelectIdx != "" {
 				if idx, err := strconv.Atoi(m.varSelectIdx); err == nil {
 					if _, _, step, err := m.executor.CurrentStep(); err == nil {
-						varMappings := variableMapping(step)
+						varMappings := m.variableMapping(step)
 						var selectedVar string
 						for _, vm := range varMappings {
 							if vm.idx == idx {
@@ -143,7 +153,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-	default:
+	case uiStateStep:
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			k := msg.String()
@@ -151,60 +161,67 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if k == "ctrl+c" || k == "q" {
 				return m, tea.Quit
 			}
-			if k == "n" && m.cmdFinished {
-				_, _, _, err := m.executor.NextStep()
-				if err == io.EOF {
-					return m, tea.Quit
-				}
-				m.viewport.SetContent("")
-				m.viewport.GotoTop()
+			if k == "enter" && m.cmdState == cmdStateIdle {
+				m.cmdOuputViewport.SetContent("")
+				m.cmdOuputViewport.GotoTop()
 				var cmd tea.Cmd
 				m, cmd = m.runCmd()
 				cmds = append(cmds, cmd)
 			}
-			if k == "e" && m.cmdFinished {
+			if k == "n" || k == "enter" && m.cmdState == cmdStateFinished {
+				_, _, _, err := m.executor.NextStep()
+				if err == io.EOF {
+					return m, tea.Quit
+				}
+				m.cmdOuputViewport.SetContent("")
+				m.cmdOuputViewport.GotoTop()
+				m.cmdState = cmdStateIdle
+				m.cmdErr = nil
+				m.cmdOutput = nil
+			}
+			if k == "e" && m.cmdState != cmdStateRunning {
 				m.varSelectIdx = ""
 				m.uiState = uiStateVarSelectMode
 			}
 		case cmdOutput:
 			m.cmdOutput.Write(msg.data)
-			m.viewport.SetContent(m.cmdOutput.String())
+			m.cmdOuputViewport.SetContent(m.cmdOutput.String())
 		case cmdFinished:
-			m.cmdFinished = true
+			m.cmdState = cmdStateFinished
 			m.cmdErr = msg.err
-		case tea.WindowSizeMsg:
-			m.height = msg.Height
-			m.width = msg.Width
-
-			m.viewport.Width = msg.Width
-			m.viewport.Height = m.calculateViewportHeight()
 		}
+	}
 
-		{
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			cmds = append(cmds, cmd)
+	{
+		// Step height is dynamic, so we need to update the viewport size after each update.
+		// We do it right before updating the viewport to ensure most up-to-date dimensions.
+		if m.uiState != uiStateInitializing {
+			m.cmdOuputViewport.Width = m.width
+			m.cmdOuputViewport.Height = m.calculateViewportHeight()
 		}
+		var cmd tea.Cmd
+		m.cmdOuputViewport, cmd = m.cmdOuputViewport.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
-		{
-			var cmd tea.Cmd
-			m.spinner, cmd = m.spinner.Update(msg)
-			cmds = append(cmds, cmd)
-		}
+	{
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
 func (m model) runCmd() (model, tea.Cmd) {
-	m.cmdFinished = false
+	m.cmdState = cmdStateRunning
 	m.cmdErr = nil
 	if m.cmdOutput == nil {
 		m.cmdOutput = &strings.Builder{}
 	}
 	m.cmdOutput.Reset()
-	m.viewport.SetContent("")
-	m.viewport.GotoTop()
+	m.cmdOuputViewport.SetContent("")
+	m.cmdOuputViewport.GotoTop()
 
 	cmd, err := m.executor.CurrentStepCmd(context.Background())
 	if err != nil {
@@ -222,7 +239,7 @@ func (m model) runCmd() (model, tea.Cmd) {
 
 func (m model) View() string {
 	baseLayer := func() *lipgloss.Layer {
-		return filledLayer(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.stepView(), m.viewport.View(), m.footerView()), m.width, m.height)
+		return filledLayer(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.stepView(), m.cmdOuputViewport.View(), m.footerView()), m.width, m.height)
 	}
 
 	switch m.uiState {
@@ -247,82 +264,109 @@ func (m model) calculateViewportHeight() int {
 
 func (m model) headerView() string {
 	ci, stepName, _, _ := m.executor.CurrentStep()
-	title := infoStyleLeft.Render(fmt.Sprintf("%s", stepName))
+	title := infoStyleLeft.Render(stepName)
 	steps := infoStyleRight.Render(fmt.Sprintf("(%d/%d)", ci+1, len(m.executor.Workflow.Steps)))
 	line := strings.Repeat("─", max(0, m.width-(lipgloss.Width(title)+lipgloss.Width(steps))))
 	return lipgloss.JoinHorizontal(lipgloss.Center, title, line, steps)
 }
 
-func (m model) renderEditSelectorNumber(n int) string {
-	num := strconv.Itoa(n)
+func (m model) renderEditSelectorNumber(mp varMapping) string {
 	if m.uiState != uiStateVarSelectMode {
 		return ""
 	}
+	if !mp.editable {
+		return lipgloss.NewStyle().Foreground(lipgloss.BrightBlack).Strikethrough(true).Render(fmt.Sprintf("[%d]", mp.idx))
+	}
 
+	num := strconv.Itoa(mp.idx)
 	var highlighted string
 	rest := num
 	if strings.HasPrefix(num, m.varSelectIdx) {
 		highlighted = m.varSelectIdx
 		rest = strings.TrimPrefix(num, m.varSelectIdx)
 	}
-	base := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	selected := base.Background(lipgloss.Color("7")).Bold(true)
+	base := lipgloss.NewStyle().Foreground(lipgloss.Green)
+	selected := base.Background(lipgloss.White).Bold(true)
 	return base.Render("[") + selected.Render(highlighted) + base.Render(rest) + base.Render("]")
 }
 
 func (m model) stepView() string {
 	_, _, step, _ := m.executor.CurrentStep()
 
-	if step.Description == "" {
-		step.Description = "(no description provided)"
+	if step.MatchedStep.Description == "" {
+		step.MatchedStep.Description = "(no description provided)"
 	}
-	description := sectionStyle.Render("Description") + "\n" + step.Description
+	description := sectionStyle.Render("Description") + "\n" + step.MatchedStep.Description
 
 	var editNumber int
 
-	inputs := sectionStyle.Render("Inputs")
-	if len(step.Inputs) == 0 {
-		inputs += "\n(none)"
+	varMappings := m.variableMapping(step)
+	inputVars := make([]varMapping, 0, len(varMappings))
+	for _, vm := range varMappings {
+		if vm.typ == varMappingTypeMatch || vm.typ == varMappingTypeInput {
+			inputVars = append(inputVars, vm)
+		}
+	}
+	outputVars := make([]varMapping, 0, len(varMappings))
+	for _, vm := range varMappings {
+		if vm.typ == varMappingTypeOutput {
+			outputVars = append(outputVars, vm)
+		}
+	}
+
+	inputView := sectionStyle.Render("Inputs")
+	if len(inputVars) == 0 {
+		inputView += "\n(none)"
 	} else {
-		for _, input := range step.Inputs {
+		for _, input := range inputVars {
 			editNumber++
-			inputs += ("\n- " + input.Name)
-			if val, ok := m.executor.CapturedOutputs[input.Name]; ok {
-				inputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(val)
-				if es := m.renderEditSelectorNumber(editNumber); es != "" {
-					inputs += " " + es
+			inputView += ("\n- " + input.name)
+			switch input.typ {
+			case varMappingTypeMatch:
+				if val, ok := step.NamedMatches[input.name]; ok {
+					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Blue).Render(val)
 				}
+			case varMappingTypeInput:
+				if val, ok := m.executor.CapturedOutputs[input.name]; ok {
+					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Magenta).Render(val)
+				}
+			}
+			if es := m.renderEditSelectorNumber(input); es != "" {
+				inputView += " " + es
 			}
 		}
 	}
 
 	outputs := sectionStyle.Render("Outputs")
-	if len(step.Outputs) == 0 {
+	if len(step.MatchedStep.Outputs) == 0 {
 		outputs += "\n(none)"
 	} else {
-		for _, output := range step.Outputs {
+		for _, output := range outputVars {
 			editNumber++
-			outputs += ("\n- " + output.Name)
-			if val, ok := m.executor.CapturedOutputs[output.Name]; ok {
-				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(val)
-				if es := m.renderEditSelectorNumber(editNumber); es != "" {
-					outputs += " " + es
-				}
+			outputs += ("\n- " + output.name)
+			if val, ok := m.executor.CapturedOutputs[output.name]; ok {
+				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(val)
+			}
+			if es := m.renderEditSelectorNumber(output); es != "" {
+				outputs += " " + es
 			}
 		}
 	}
 
 	command := "Command"
-	if m.cmdFinished {
+	switch m.cmdState {
+	case cmdStateIdle:
+		command += " (Enter to run)"
+	case cmdStateFinished:
 		if m.cmdErr == nil {
-			command += lipgloss.NewStyle().Bold(false).Foreground(lipgloss.Color("2")).Render(" (Finished successfully)")
+			command += lipgloss.NewStyle().Bold(false).Foreground(lipgloss.Green).Render(" (Finished successfully)")
 		} else {
-			command += lipgloss.NewStyle().Bold(false).Foreground(lipgloss.Color("1")).Render(fmt.Sprintf(" (Finished with error: %v)", m.cmdErr))
+			command += lipgloss.NewStyle().Bold(false).Foreground(lipgloss.Red).Render(fmt.Sprintf(" (Finished with error: %v)", m.cmdErr))
 		}
 	}
 	command = sectionStyle.Render(command)
 
-	return padding1.Render(lipgloss.JoinVertical(lipgloss.Left, description, inputs, outputs, command))
+	return padding1.Render(lipgloss.JoinVertical(lipgloss.Left, description, inputView, outputs, command))
 }
 
 func (m model) footerView() string {
@@ -331,42 +375,80 @@ func (m model) footerView() string {
 	case uiStateInputOverlay:
 		help = infoStyleLeft.Render("esc: cancel • enter: save")
 	case uiStateVarSelectMode:
-		help = infoStyleLeft.Render("0-9 select var • esc: exit selector • enter: edit variable")
-	default:
-		help = infoStyleLeft.Render("e: edit • n: next step • q: quit")
+		help = infoStyleLeft.Render("0-9: select var • e, esc: exit selector • enter: edit variable")
+	case uiStateStep:
+		switch m.cmdState {
+		case cmdStateIdle:
+			help = infoStyleLeft.Render("enter: run • e: edit • q: quit")
+		case cmdStateRunning:
+			help = infoStyleLeft.Render("q: quit")
+		case cmdStateFinished:
+			help = infoStyleLeft.Render("enter, n: next step • e: edit • q: quit")
+		}
 	}
-	// info := infoStyleRight.Render(fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100))
-	info := infoStyleRight.Render(m.spinner.View())
-	if m.cmdFinished && m.cmdErr == nil {
-		info = infoStyleRight.Render("✅")
-	} else if m.cmdFinished && m.cmdErr != nil {
-		info = infoStyleRight.Render("❌")
+
+	var info string
+	switch m.cmdState {
+	case cmdStateIdle:
+		info = infoStyleRight.Render("⏸")
+	case cmdStateRunning:
+		info = infoStyleRight.Render(m.spinner.View())
+	case cmdStateFinished:
+		if m.cmdErr == nil {
+			info = infoStyleRight.Render("✅")
+		} else {
+			info = infoStyleRight.Render("❌")
+		}
 	}
 
 	line := strings.Repeat("─", max(0, m.width-(lipgloss.Width(info)+lipgloss.Width(help))))
 	return lipgloss.JoinHorizontal(lipgloss.Center, help, line, info)
 }
 
+type varMappingType string
+
+const (
+	varMappingTypeMatch  varMappingType = "match"
+	varMappingTypeInput  varMappingType = "input"
+	varMappingTypeOutput varMappingType = "output"
+)
+
 type varMapping struct {
-	name string
-	idx  int
+	name     string
+	idx      int
+	typ      varMappingType
+	editable bool
 }
 
-func variableMapping(s steps.Step) []varMapping {
+func (m model) variableMapping(s executor.Step) []varMapping {
 	var mappings []varMapping
 	var idx int
-	for _, input := range s.Inputs {
+
+	for _, name := range slices.Sorted(maps.Keys(s.NamedMatches)) {
 		idx++
 		mappings = append(mappings, varMapping{
-			name: input.Name,
-			idx:  idx,
+			name:     name,
+			idx:      idx,
+			typ:      varMappingTypeMatch,
+			editable: false,
 		})
 	}
-	for _, output := range s.Outputs {
+	for _, input := range s.MatchedStep.Inputs {
 		idx++
 		mappings = append(mappings, varMapping{
-			name: output.Name,
-			idx:  idx,
+			name:     input.Name,
+			idx:      idx,
+			typ:      varMappingTypeInput,
+			editable: m.cmdState == cmdStateIdle,
+		})
+	}
+	for _, output := range s.MatchedStep.Outputs {
+		idx++
+		mappings = append(mappings, varMapping{
+			name:     output.Name,
+			idx:      idx,
+			typ:      varMappingTypeOutput,
+			editable: m.cmdState == cmdStateFinished,
 		})
 	}
 	return mappings
