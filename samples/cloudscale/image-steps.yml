@@ -1,0 +1,20 @@
+steps:
+- match: Then I download the OpenShift image for version "(?P<image_name>[^"]+)"
+  outputs:
+  - name: image_path
+  run: |
+    set -euo pipefail
+    image_path="rhcos-4.19.qcow2"
+
+    echo Downloading OpenShift image "$MATCH_image_name" to "$image_path"
+
+    . ./semver.sh
+
+    MAJOR=0
+    MINOR=0
+    PATCH=0
+    SPECIAL=""
+    semverParseInto "$MATCH_image_name" MAJOR MINOR PATCH SPECIAL
+
+    curl -L https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.19/4.19.10/rhcos-4.19.10-x86_64-openstack.x86_64.qcow2.gz | gzip -d > "$image_path"
+    env -i "image_path=$image_path" >> $OUTPUT

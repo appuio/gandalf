@@ -185,7 +185,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case cmdOutput:
 			m.cmdOutput.Write(msg.data)
-			m.cmdOuputViewport.SetContent(m.cmdOutput.String())
+			// Viewport seems to not handle carriage returns well, so we need to process them here.
+			linesWithoutCarriageReturn := []string{}
+			for line := range strings.Lines(m.cmdOutput.String()) {
+				line := strings.TrimRight(line, "\n")
+				parts := strings.Split(line, "\r")
+				nl := make([]rune, len(line))
+				for _, part := range parts {
+					copy(nl[0:], []rune(part))
+				}
+				linesWithoutCarriageReturn = append(linesWithoutCarriageReturn, string(nl))
+			}
+			m.cmdOuputViewport.SetContent(strings.Join(linesWithoutCarriageReturn, "\n"))
 		case cmdFinished:
 			m.cmdState = cmdStateFinished
 			m.cmdErr = msg.err
@@ -238,20 +249,21 @@ func (m model) runCmd() (model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	baseLayer := func() *lipgloss.Layer {
-		return filledLayer(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.stepView(), m.cmdOuputViewport.View(), m.footerView()), m.width, m.height)
+	baseLayer := func() string {
+		return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.stepView(), m.cmdOuputViewport.View(), m.footerView())
 	}
 
 	switch m.uiState {
 	case uiStateInitializing:
 		return "\n  Initializing..."
 	case uiStateInputOverlay:
+		// Compose overlay on top of base layer
 		overlayLayer := lipgloss.NewLayer(
 			lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2).Width(m.width - 12).Height(m.height - 8).Render(m.overlayVarInput.View()),
 		)
-		return lipgloss.NewCanvas(baseLayer(), overlayLayer.X(6).Y(4)).Render()
+		return lipgloss.NewCanvas(filledLayer(baseLayer(), m.width, m.height), overlayLayer.X(6).Y(4)).Render()
 	default:
-		return lipgloss.NewCanvas(baseLayer()).Render()
+		return baseLayer()
 	}
 }
 

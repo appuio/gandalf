@@ -1,0 +1,32 @@
+steps:
+- match: Given I have all prerequisites installed
+  description: |-
+    This step checks if all necessary prerequisites are installed on your system,
+    including 'yq' (version 4 or higher, by Mike Farah) and 'oc' (OpenShift CLI).
+  run: |
+    set -euo pipefail
+    echo "Checking prerequisites..."
+    which yq >/dev/null 2>&1 && { echo "✅ yq is installed."; } || { echo "❌ yq is not installed. Please install yq to proceed."; exit 1; }
+    yq --version | grep -E 'version v[4-9]\.' | grep 'mikefarah' >/dev/null 2>&1 && { echo "✅ yq by mikefarah version 4 or higher is installed."; } || { echo "❌ yq version 4 or higher is required. Please upgrade yq to proceed."; exit 1; }
+    which oc >/dev/null 2>&1 && { echo "✅ oc (OpenShift CLI) is installed."; } || { echo "❌ oc (OpenShift CLI) is not installed. Please install oc to proceed."; exit 1; }
+    echo "✅ All prerequisites are met."
+- match: And a lieutenant cluster
+  description: |-
+    This step retrieves the Commodore tenant ID associated with the given lieutenant cluster ID.
+
+    This checks that you have access to the Commodore API and the cluster ID is valid.
+
+    Use https://api.syn.vshn.net as the Commodore API URL for production clusters.
+  inputs:
+  - name: commodore_api_url
+  - name: commodore_cluster_id
+  outputs:
+  - name: commodore_tenant_id
+  run: |
+    set -euo pipefail
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    echo "Retrieving Commodore tenant ID for cluster ID '$INPUT_commodore_cluster_id' from API at '$INPUT_commodore_api_url'..."
+    tenant_id=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id} | jq -r .tenant)
+    echo "$tenant_id" | grep 't-' >/dev/null 2>&1 && { echo "✅ Retrieved tenant ID '$tenant_id' for cluster ID '$INPUT_commodore_cluster_id'."; } || { echo "❌ Failed to retrieve valid tenant ID for cluster ID '$INPUT_commodore_cluster_id'. Got '$tenant_id'. Please check your Commodore API access and cluster ID."; exit 1; }
+    env -i "commodore_tenant_id=$tenant_id" >> $OUTPUT

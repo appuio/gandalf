@@ -41,6 +41,15 @@ func (e *Executor) Prepare() error {
 		}
 	}
 
+	// TODO separate from outputs
+	for _, step := range e.Steps {
+		for _, input := range step.Inputs {
+			if os.Getenv("INPUT_"+input.Name) != "" {
+				e.CapturedOutputs[input.Name] = os.Getenv("INPUT_" + input.Name)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -108,6 +117,7 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	cmd.Env = os.Environ()
 	for _, input := range matchedStep.MatchedStep.Inputs {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("INPUT_%s=%s", input.Name, e.CapturedOutputs[input.Name]))
 	}
