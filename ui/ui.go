@@ -111,7 +111,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if k := msg.String(); k == "esc" || k == "enter" {
 				if k == "enter" {
-					m.executor.CapturedOutputs[m.overlayVarInput.varName] = m.overlayVarInput.textInput.Value()
+					m.executor.StateManager.SetOutput(m.overlayVarInput.varName, m.overlayVarInput.textInput.Value())
 				}
 				m.uiState = uiStateStep
 				m.varSelectIdx = ""
@@ -143,7 +143,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if selectedVar != "" {
 							m.overlayVarInput.varName = selectedVar
 							m.uiState = uiStateInputOverlay
-							m.overlayVarInput.textInput.SetValue(m.executor.CapturedOutputs[selectedVar])
+							m.overlayVarInput.textInput.SetValue(m.executor.StateManager.Outputs()[selectedVar].Value)
 							cmds = append(cmds, m.overlayVarInput.textInput.Focus())
 						}
 					}
@@ -323,6 +323,8 @@ func (m model) stepView() string {
 		}
 	}
 
+	stateOutputs := m.executor.StateManager.Outputs()
+
 	inputView := sectionStyle.Render("Inputs")
 	if len(inputVars) == 0 {
 		inputView += "\n(none)"
@@ -336,8 +338,8 @@ func (m model) stepView() string {
 					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Blue).Render(val)
 				}
 			case varMappingTypeInput:
-				if val, ok := m.executor.CapturedOutputs[input.name]; ok {
-					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Magenta).Render(val)
+				if val, ok := stateOutputs[input.name]; ok {
+					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Magenta).Render(val.Value)
 				}
 			}
 			if es := m.renderEditSelectorNumber(input); es != "" {
@@ -353,8 +355,8 @@ func (m model) stepView() string {
 		for _, output := range outputVars {
 			editNumber++
 			outputs += ("\n- " + output.name)
-			if val, ok := m.executor.CapturedOutputs[output.name]; ok {
-				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(val)
+			if val, ok := stateOutputs[output.name]; ok {
+				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(val.Value)
 			}
 			if es := m.renderEditSelectorNumber(output); es != "" {
 				outputs += " " + es

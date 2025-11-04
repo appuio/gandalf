@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/appuio/guided-setup/pkg/executor"
+	"github.com/appuio/guided-setup/pkg/state"
 	"github.com/appuio/guided-setup/pkg/steps"
 	"github.com/appuio/guided-setup/pkg/workflow"
 	"github.com/appuio/guided-setup/ui"
@@ -38,6 +39,12 @@ func NewRunCommand() *cobra.Command {
 func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	_ = cmd.Context()
 
+	stateManager, err := state.NewStateManager(".guided-setup-state.json")
+	if err != nil {
+		return fmt.Errorf("failed to create state manager: %w", err)
+	}
+	defer stateManager.Close()
+
 	rawWF, err := os.ReadFile(args[0])
 	if err != nil {
 		return fmt.Errorf("failed to read workflow file: %w", err)
@@ -68,8 +75,9 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	}
 
 	executor := &executor.Executor{
-		Workflow: wf,
-		Steps:    collectedSteps,
+		Workflow:     wf,
+		Steps:        collectedSteps,
+		StateManager: stateManager,
 	}
 
 	if err := executor.Prepare(); err != nil {

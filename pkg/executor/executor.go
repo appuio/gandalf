@@ -5,13 +5,15 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 
+	"github.com/appuio/guided-setup/pkg/state"
 	"github.com/appuio/guided-setup/pkg/steps"
 	"github.com/appuio/guided-setup/pkg/workflow"
+	"go.uber.org/multierr"
 )
 
 type Step struct {
@@ -25,29 +27,65 @@ type Executor struct {
 	Steps            []steps.Step
 	currentStepIndex int
 
-	CapturedOutputs map[string]string
+	StateManager *state.StateManager
 
 	preparedMatches map[string]Step
 }
 
 func (e *Executor) Prepare() error {
-	e.CapturedOutputs = make(map[string]string)
-	e.preparedMatches = make(map[string]Step)
+	if e.StateManager == nil {
+		return fmt.Errorf("state manager is nil")
+	}
+	if len(e.Workflow.Steps) == 0 {
+		return fmt.Errorf("workflow has no steps")
+	}
 
+	// Match workflow steps to available steps.
+	e.preparedMatches = make(map[string]Step)
+	var errors []error
 	for _, wfStep := range e.Workflow.Steps {
 		err := e.matchStep(wfStep)
 		if err != nil {
-			return err
+			errors = append(errors, err)
 		}
 	}
+	if err := multierr.Combine(errors...); err != nil {
+		return fmt.Errorf("failed to match workflow steps: %w", err)
+	}
 
+	// Read initial inputs from environment.
+	// Allows users to predefine inputs.
 	// TODO separate from outputs
 	for _, step := range e.Steps {
 		for _, input := range step.Inputs {
 			if os.Getenv("INPUT_"+input.Name) != "" {
-				e.CapturedOutputs[input.Name] = os.Getenv("INPUT_" + input.Name)
+				err := e.StateManager.SetOutput(input.Name, os.Getenv("INPUT_"+input.Name))
+				if err != nil {
+					return fmt.Errorf("failed to set initial input %q: %w", input.Name, err)
+				}
 			}
 		}
+	}
+
+	// Determine current step from state manager.
+	// If no current step, start from the beginning.
+	// If final step, return error.
+	// Otherwise, find the index of the current step in the workflow.
+	// Returns an error if the current step is not found in the workflow.
+	switch cs := e.StateManager.CurrentStep(); cs {
+	case "":
+		if err := e.StateManager.AdvanceStep(e.Workflow.Steps[0]); err != nil {
+			return fmt.Errorf("failed to set initial step in state manager: %w", err)
+		}
+	case state.FinalStep:
+		return fmt.Errorf("workflow already completed")
+	default:
+		// Duplicate steps is already guarded against in step matching.
+		index := slices.Index(e.Workflow.Steps, cs)
+		if index == -1 {
+			return fmt.Errorf("current step %q from state manager not found in workflow", cs)
+		}
+		e.currentStepIndex = index
 	}
 
 	return nil
@@ -99,9 +137,17 @@ func (e *Executor) CurrentStep() (i int, name string, matchedStep Step, err erro
 
 func (e *Executor) NextStep() (i int, name string, matchedStep Step, err error) {
 	if e.currentStepIndex+1 >= len(e.Workflow.Steps) {
+		if err := e.StateManager.SetFinalStep(); err != nil {
+			return 0, "", Step{}, fmt.Errorf("failed to set final step in state manager: %w", err)
+		}
 		return 0, "", Step{}, io.EOF
 	}
 	e.currentStepIndex++
+
+	if err := e.StateManager.AdvanceStep(e.Workflow.Steps[e.currentStepIndex]); err != nil {
+		return 0, "", Step{}, fmt.Errorf("failed to advance step in state manager: %w", err)
+	}
+
 	return e.CurrentStep()
 }
 
@@ -118,8 +164,9 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.Env = os.Environ()
+	outputs := e.StateManager.Outputs()
 	for _, input := range matchedStep.MatchedStep.Inputs {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("INPUT_%s=%s", input.Name, e.CapturedOutputs[input.Name]))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("INPUT_%s=%s", input.Name, outputs[input.Name]))
 	}
 	for k, v := range matchedStep.NamedMatches {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("MATCH_%s=%s", k, v))
@@ -131,16 +178,16 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 	outputFile := filepath.Join(outputDir, "outputs.env")
 	cmd.Env = append(cmd.Env, fmt.Sprintf("OUTPUT=%s", outputFile))
 	return &Cmd{
-		Cmd:        cmd,
-		OutputFile: outputFile,
-		outputs:    &e.CapturedOutputs,
+		Cmd:            cmd,
+		OutputFile:     outputFile,
+		outputCallback: e.StateManager.SetOutput,
 	}, nil
 }
 
 type Cmd struct {
-	Cmd        *exec.Cmd
-	OutputFile string
-	outputs    *map[string]string
+	Cmd            *exec.Cmd
+	OutputFile     string
+	outputCallback func(key, value string) error
 }
 
 func (c *Cmd) Start() error {
@@ -172,6 +219,16 @@ func (c *Cmd) Wait() error {
 		state[string(key)] = string(value)
 	}
 
-	maps.Copy(*c.outputs, state)
+	var errors []error
+	for k, v := range state {
+		if err := c.outputCallback(k, v); err != nil {
+			errors = append(errors, fmt.Errorf("failed to set output %q: %w", k, err))
+		}
+	}
+
+	if err := multierr.Combine(errors...); err != nil {
+		return fmt.Errorf("failed to save outputs: %w", err)
+	}
+
 	return os.RemoveAll(filepath.Dir(c.OutputFile))
 }

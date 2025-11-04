@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss/v2 v2.0.0-beta.3
 	github.com/spf13/cobra v1.10.1
+	go.uber.org/multierr v1.11.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
