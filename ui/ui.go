@@ -194,6 +194,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				linesWithoutCarriageReturn = append(linesWithoutCarriageReturn, string(nl))
 			}
 			m.cmdOuputViewport.SetContent(strings.Join(linesWithoutCarriageReturn, "\n"))
+			m.cmdOuputViewport.GotoBottom()
 		case cmdFinished:
 			m.cmdState = cmdStateFinished
 			m.cmdErr = msg.err

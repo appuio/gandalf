@@ -1,12 +1,16 @@
 steps:
 - match: Then I download the OpenShift image for version "(?P<image_name>[^"]+)"
+  description: |-
+    This step downloads the OpenShift image for the version specified by in the step.
+
+    If the image already exists locally, it skips the download.
   outputs:
   - name: image_path
+  - name: image_major
+  - name: image_minor
+  - name: image_patch
   run: |
     set -euo pipefail
-    image_path="rhcos-4.19.qcow2"
-
-    echo Downloading OpenShift image "$MATCH_image_name" to "$image_path"
 
     . ./semver.sh
 
@@ -16,5 +20,137 @@ steps:
     SPECIAL=""
     semverParseInto "$MATCH_image_name" MAJOR MINOR PATCH SPECIAL
 
-    curl -L https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.19/4.19.10/rhcos-4.19.10-x86_64-openstack.x86_64.qcow2.gz | gzip -d > "$image_path"
+    image_path="rhcos-$MAJOR.$MINOR.qcow2"
+
+    echo "Image is $image_path"
+
+    if [ -f "$image_path" ]; then
+      echo "Image $image_path already exists, skipping download."
+      env -i "image_path=$image_path" >> $OUTPUT
+      exit 0
+    fi
+
+    echo Downloading OpenShift image "$MATCH_image_name" to "$image_path"
+
+    curl -L "https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/${MAJOR}.${MINOR}/${MATCH_image_name}/rhcos-${MATCH_image_name}-x86_64-openstack.x86_64.qcow2.gz" | gzip -d > "$image_path"
     env -i "image_path=$image_path" >> $OUTPUT
+    env -i "image_major=$MAJOR" >> $OUTPUT
+    env -i "image_minor=$MINOR" >> $OUTPUT
+    env -i "image_patch=$PATCH" >> $OUTPUT
+
+- match: And I set up required S3 buckets
+  description: |-
+    This step sets up the required S3 buckets for the OpenShift cluster installation.
+
+    It uses the MinIO Client (`mc`) to create the necessary buckets if they do not already exist.
+  inputs:
+  - name: cloudscale_token
+  - name: commodore_cluster_id
+  - name: cloudscale_region
+  outputs:
+  - name: bucket_user
+  run: |
+    set -euo pipefail
+
+    response=$(curl -sH "Authorization: Bearer ${INPUT_cloudscale_token}" \
+      https://api.cloudscale.ch/v1/objects-users | \
+      jq -e ".[] | select(.display_name == \"${INPUT_commodore_cluster_id}\")" ||:)
+    if [ -z "$response" ]; then
+      echo "Creating Cloudscale S3 user for cluster ID '${INPUT_commodore_cluster_id}'..."
+      response=$(curl -sH "Authorization: Bearer ${INPUT_cloudscale_token}" \
+        -F display_name=${INPUT_commodore_cluster_id} \
+        https://api.cloudscale.ch/v1/objects-users)
+      echo "Created user with id $(echo "$response" | jq -r .id)"
+    else
+      echo "Cloudscale S3 user for cluster ID '${INPUT_commodore_cluster_id}' already exists. id: $(echo "$response" | jq -r .id)"
+    fi
+
+    mc alias set \
+      "${INPUT_commodore_cluster_id}" "https://objects.${INPUT_cloudscale_region}.cloudscale.ch" \
+      $(echo $response | jq -r '.keys[0].access_key') \
+      $(echo $response | jq -r '.keys[0].secret_key')
+
+    mc mb --ignore-existing \
+      "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition"
+    mc mb --ignore-existing \
+      "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-image-registry"
+    mc mb --ignore-existing \
+      "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-logstore"
+
+    export AWS_ACCESS_KEY_ID=$(mc alias list ${INPUT_commodore_cluster_id} -json | jq -r .accessKey)
+    export AWS_SECRET_ACCESS_KEY=$(mc alias list ${INPUT_commodore_cluster_id} -json | jq -r .secretKey)
+
+    echo "Configuring S3 bucket policies..."
+    aws s3api put-public-access-block \
+      --endpoint-url "https://objects.${INPUT_cloudscale_region}.cloudscale.ch" \
+      --bucket "${INPUT_commodore_cluster_id}-image-registry" \
+      --public-access-block-configuration BlockPublicAcls=false
+    aws s3api put-bucket-lifecycle-configuration \
+      --endpoint-url "https://objects.${INPUT_cloudscale_region}.cloudscale.ch" \
+      --bucket "${INPUT_commodore_cluster_id}-image-registry" \
+      --lifecycle-configuration '{
+        "Rules": [
+          {
+            "ID": "cleanup-incomplete-multipart-registry-uploads",
+            "Prefix": "",
+            "Status": "Enabled",
+            "AbortIncompleteMultipartUpload": {
+              "DaysAfterInitiation": 1
+            }
+          }
+        ]
+      }'
+    echo "S3 buckets are set up."
+
+    env -i "bucket_user=$(echo $response | jq -c .)" >> $OUTPUT
+
+- match: And I import the image in Cloudscale
+  description: |-
+    This step uploads the Red Hat CoreOS image to the S3 bucket for the image registry.
+
+    It then imports the image into Cloudscale as a custom image.
+
+    It uses the MinIO Client (`mc`) to perform the upload.
+  inputs:
+  - name: image_path
+  - name: commodore_cluster_id
+  - name: cloudscale_region
+  - name: bucket_user
+  - name: image_major
+  - name: image_minor
+  - name: cloudscale_token
+  run: |
+    set -euo pipefail
+
+
+    auth_header="Authorization: Bearer ${INPUT_cloudscale_token}"
+
+    slug=$(curl -sH "$auth_header" https://api.cloudscale.ch/v1/custom-images | jq -r ".[] | select(.slug == \"rhcos-${INPUT_image_major}.${INPUT_image_minor}\") | .zones[].slug")
+    if [ -n "$slug" ] && [ "$slug" != "null" ]; then
+      echo "Image 'rhcos-${INPUT_image_major}.${INPUT_image_minor}' already exists in Cloudscale, skipping upload."
+      exit 0
+    fi
+
+    mc alias set \
+      "${INPUT_commodore_cluster_id}" "https://objects.${INPUT_cloudscale_region}.cloudscale.ch" \
+      $(echo "$INPUT_bucket_user" | jq -r '.keys[0].access_key') \
+      $(echo "$INPUT_bucket_user" | jq -r '.keys[0].secret_key')
+
+    echo "Uploading Red Hat CoreOS image '$INPUT_image_path' to S3 bucket '${INPUT_commodore_cluster_id}-image-registry'..."
+    mc cp "rhcos-${INPUT_image_major}.${INPUT_image_minor}.qcow2" "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition/"
+
+    echo "Upload completed."
+    mc anonymous set download "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition/rhcos-${INPUT_image_major}.${INPUT_image_minor}.qcow2"
+
+    echo "Importing image into Cloudscale..."
+
+    curl -i -H "$auth_header" \
+      -F url="$(mc share download --json "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition/rhcos-${INPUT_image_major}.${INPUT_image_minor}.qcow2" | jq -r .url)" \
+      -F name="RHCOS ${INPUT_image_major}.${INPUT_image_minor}" \
+      -F zones="${INPUT_cloudscale_region}1" \
+      -F slug="rhcos-${INPUT_image_major}.${INPUT_image_minor}" \
+      -F source_format=qcow2 \
+      -F user_data_handling=pass-through \
+      https://api.cloudscale.ch/v1/custom-images/import
+
+    echo "Image import initiated. ⚠️ TODO: Poll for completion."

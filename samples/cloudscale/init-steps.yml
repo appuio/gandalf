@@ -6,22 +6,70 @@ steps:
   run: |
     set -euo pipefail
     echo "Checking prerequisites..."
+
     which yq >/dev/null 2>&1 && { echo "✅ yq is installed."; } || { echo "❌ yq is not installed. Please install yq to proceed."; exit 1; }
     yq --version | grep -E 'version v[4-9]\.' | grep 'mikefarah' >/dev/null 2>&1 && { echo "✅ yq by mikefarah version 4 or higher is installed."; } || { echo "❌ yq version 4 or higher is required. Please upgrade yq to proceed."; exit 1; }
+
+    which jq >/dev/null 2>&1 && { echo "✅ jq is installed."; } || { echo "❌ jq is not installed. Please install jq to proceed."; exit 1; }
+
     which oc >/dev/null 2>&1 && { echo "✅ oc (OpenShift CLI) is installed."; } || { echo "❌ oc (OpenShift CLI) is not installed. Please install oc to proceed."; exit 1; }
+
+    which vault >/dev/null 2>&1 && { echo "✅ vault (HashiCorp Vault) is installed."; } || { echo "❌ vault (HashiCorp Vault) is not installed. Please install vault to proceed."; exit 1; }
+
+    which curl >/dev/null 2>&1 && { echo "✅ curl is installed."; } || { echo "❌ curl is not installed. Please install curl to proceed."; exit 1; }
+
+    which docker >/dev/null 2>&1 && { echo "✅ docker is installed."; } || { echo "❌ docker is not installed. Please install docker to proceed."; exit 1; }
+
+    which mc >/dev/null 2>&1 && { echo "✅ mc (MinIO Client) is installed."; } || { echo "❌ mc (MinIO Client) is not installed. Please install mc >= RELEASE.2024-01-18T07-03-39Z to proceed."; exit 1; }
+    mc_version=$(mc --version | grep -Eo 'RELEASE[^ ]+')
+    echo "$mc_version" | grep -E 'RELEASE\.202[4-9]-' >/dev/null 2>&1 && { echo "✅ mc version ${mc_version} is sufficient."; } || { echo "❌ mc version ${mc_version} is insufficient. Please upgrade mc to >= RELEASE.2024-01-18T07-03-39Z to proceed."; exit 1; }
+
+    which aws >/dev/null 2>&1 && { echo "✅ aws (AWS CLI) is installed."; } || { echo "❌ aws (AWS CLI) is not installed. Please install aws to proceed. Our recommended installer is uv: 'uv tool install awscli'"; exit 1; }
+
     echo "✅ All prerequisites are met."
+- match: And I have the `openshift-install` binary for version "(?P<ocp_version>[^"]+)"
+  description: |-
+    This step checks if the `openshift-install` binary for the specified OpenShift version is available in your PATH.
+
+    If not found, it provides instructions on how to download it.
+    Direct download links:
+  run: |
+    set -euo pipefail
+
+    if command -v openshift-install >/dev/null 2>&1; then
+      INSTALLED_VERSION=$(openshift-install version | grep 'openshift-install' | awk '{print $2}' | sed 's/^v//' | sed -E 's/\.[0-9]{1,2}$//')
+      if [ "$INSTALLED_VERSION" = "$MATCH_ocp_version" ]; then
+        echo "✅ openshift-install version ${MATCH_ocp_version}.XX is installed."
+        exit 0
+      else
+        echo "❌ openshift-install version $INSTALLED_VERSION is installed, but version $MATCH_ocp_version is required. Please download the openshift-install binary for version $MATCH_ocp_version from https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable-${MATCH_ocp_version}/ and add it to your PATH."
+        exit 1
+      fi
+    else
+      echo "❌ openshift-install binary not found in PATH. Please download the openshift-install binary for version $MATCH_ocp_version from https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable-${MATCH_ocp_version}/ and add it to your PATH."
+      exit 1
+    fi
 - match: And a lieutenant cluster
   description: |-
     This step retrieves the Commodore tenant ID associated with the given lieutenant cluster ID.
 
-    This checks that you have access to the Commodore API and the cluster ID is valid.
-
     Use https://api.syn.vshn.net as the Commodore API URL for production clusters.
+
+    For customer clusters ensure the following facts are set:
+    * sales_order: Name of the sales order to which the cluster is billed, such as S10000
+    * service_level: Name of the service level agreement for this cluster, such as guaranteed-availability
+    * access_policy: Access-Policy of the cluster, such as regular or swissonly
+    * release_channel: Name of the syn component release channel to use, such as stable
+    * maintenance_window: Pick the appropriate upgrade schedule, such as monday-1400 for test clusters, tuesday-1000 for prod or custom to not (yet) enable maintenance
+    * cilium_addons: Comma-separated list of cilium addons the customer gets billed for, such as advanced_networking or tetragon. Set to NONE if no addons should be billed.
+
+    This step checks that you have access to the Commodore API and the cluster ID is valid.
   inputs:
   - name: commodore_api_url
   - name: commodore_cluster_id
   outputs:
   - name: commodore_tenant_id
+  - name: cloudscale_region
   run: |
     set -euo pipefail
     export COMMODORE_API_URL="${INPUT_commodore_api_url}"
@@ -30,3 +78,217 @@ steps:
     tenant_id=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id} | jq -r .tenant)
     echo "$tenant_id" | grep 't-' >/dev/null 2>&1 && { echo "✅ Retrieved tenant ID '$tenant_id' for cluster ID '$INPUT_commodore_cluster_id'."; } || { echo "❌ Failed to retrieve valid tenant ID for cluster ID '$INPUT_commodore_cluster_id'. Got '$tenant_id'. Please check your Commodore API access and cluster ID."; exit 1; }
     env -i "commodore_tenant_id=$tenant_id" >> $OUTPUT
+
+    export region=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id} | jq -r .facts.region)
+    test -z "$region" && test "$region" != "null" && { echo "❌ Failed to retrieve cloudscale region for cluster ID '$INPUT_commodore_cluster_id'."; exit 1; } || { echo "✅ Retrieved cloudscale region '$region' for cluster ID '$INPUT_commodore_cluster_id'."; }
+    env -i "cloudscale_region=$region" >> $OUTPUT
+- match: And Cloudscale API tokens
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  description: |-
+    Create 2 new cloudscale API tokens with read+write permissions and name them <cluster_id> and <cluster_id>_floaty on control.cloudscale.ch/service/<your-project>/api-token.
+
+    This step currently does not validate the tokens, but ensures they are provided.
+- match: And a personal VSHN GitLab access token
+  description: |-
+    This step ensures that you have provided a personal access token for VSHN GitLab.
+
+    Create the token at https://git.vshn.net/-/user_settings/personal_access_tokens with the "api" scope.
+
+    This step currently does not validate the token, but ensures it is provided.
+  inputs:
+  - name: gitlab_api_token
+  - name: gitlab_user_name
+- match: And a control.vshn.net Servers API token
+  description: |-
+    This step ensures that you have provided an API token for control.vshn.net Servers API.
+
+    Create the token at https://control.vshn.net/tokens/_create/servers and ensure your IP is allowlisted.
+
+    This step currently does not validate the token, but ensures it is provided.
+  inputs:
+  - name: control_vshn_api_token
+- match: And basic cluster information
+  description: |-
+    This step collects two essential pieces of information required for cluster setup: the base domain and the Red Hat pull secret.
+
+    See https://kb.vshn.ch/oc4/explanations/dns_scheme.html for more information about the base domain.
+    Get a pull secret from https://cloud.redhat.com/openshift/install/pull-secret.
+  inputs:
+  - name: base_domain
+  - name: redhat_pull_secret
+
+- match: Then I set secrets in Vault
+  description: |-
+    This step stores the collected secrets and tokens in the ProjectSyn Vault.
+  inputs:
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: bucket_user
+  - name: vault_address
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  outputs:
+  - name: hieradata_repo_user
+  - name: hieradata_repo_token
+  run: |
+    set -euo pipefail
+
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+
+    # Set the cloudscale.ch access secrets
+    vault kv put clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/cloudscale \
+      token=${INPUT_cloudscale_token} \
+      s3_access_key=$(echo "${INPUT_bucket_user}" | jq -r '.keys[0].access_key') \
+      s3_secret_key=$(echo "${INPUT_bucket_user}" | jq -r '.keys[0].secret_key')
+
+    # Put LB API key in Vault
+    vault kv put clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/floaty \
+      iam_secret=${INPUT_cloudscale_token_floaty}
+
+    # Generate an HTTP secret for the registry
+    vault kv put clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/registry \
+      httpSecret=$(LC_ALL=C tr -cd "A-Za-z0-9" </dev/urandom | head -c 128)
+
+    # Generate a master password for K8up backups
+    vault kv put clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/global-backup \
+      password=$(LC_ALL=C tr -cd "A-Za-z0-9" </dev/urandom | head -c 32)
+
+    # Generate a password for the cluster object backups
+    vault kv put clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/cluster-backup \
+      password=$(LC_ALL=C tr -cd "A-Za-z0-9" </dev/urandom | head -c 32)
+
+    hieradata_repo_secret=$(vault kv get \
+      -format=json "clusters/kv/lbaas/hieradata_repo_token" | jq '.data.data')
+    env -i "hieradata_repo_user=$(echo "${hieradata_repo_secret}" | jq -r '.user')" >> $OUTPUT
+    env -i "hieradata_repo_token=$(echo "${hieradata_repo_secret}" | jq -r '.token')" >> $OUTPUT
+
+- match: And I check the cluster domain
+  description: |-
+    Please verify that the base domain generated is correct for your setup.
+  inputs:
+  - name: commodore_cluster_id
+  - name: base_domain
+  outputs:
+  - name: cluster_domain
+  run: |
+    set -euo pipefail
+
+    cluster_domain="${INPUT_commodore_cluster_id}.${INPUT_base_domain}"
+    echo "Cluster domain is set to '$cluster_domain'"
+    echo "cluster_domain=$cluster_domain" >> $OUTPUT
+
+- match: And I prepare the cluster repository
+  description: |-
+    This step prepares the local cluster repository by cloning the Commodore hieradata repository
+    and setting up the necessary configuration for the specified cluster.
+  inputs:
+  - name: commodore_api_url
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: hieradata_repo_user
+  - name: cluster_domain
+  - name: hieradata_repo_token
+  - name: image_major
+  - name: image_minor
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    rm -rf inventory/classes/
+    mkdir -p inventory/classes/
+    git clone $(curl -sH"Authorization: Bearer $(commodore fetch-token)" "${INPUT_commodore_api_url}/tenants/${INPUT_commodore_tenant_id}" | jq -r '.gitRepo.url') inventory/classes/${INPUT_commodore_tenant_id}
+
+    pushd "inventory/classes/${INPUT_commodore_tenant_id}/"
+
+    yq eval -i ".parameters.openshift.baseDomain = \"${INPUT_cluster_domain}\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    git diff --exit-code --quiet || git commit -a -m "Configure cluster domain for ${INPUT_commodore_cluster_id}"
+
+    if ls openshift4.y*ml 1>/dev/null 2>&1; then
+      yq eval -i '.classes += ".openshift4"' ${INPUT_commodore_cluster_id}.yml;
+      git diff --exit-code --quiet || git commit -a -m "Include openshift4 class for ${INPUT_commodore_cluster_id}"
+    fi
+
+    yq eval -i '.parameters.openshift.cloudscale.subnet_uuid = "TO_BE_DEFINED"' ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i '.parameters.openshift.cloudscale.rhcos_image_slug = "rhcos-4.19"' \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift4_terraform.terraform_variables.ignition_ca = \"TO_BE_DEFINED\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    git diff --exit-code --quiet || git commit -a -m "Configure Cloudscale metaparameters on ${INPUT_commodore_cluster_id}"
+
+    yq eval -i '.applications += ["cloudscale-loadbalancer-controller"]' ${INPUT_commodore_cluster_id}.yml
+    yq eval -i '.applications = (.applications | unique)' ${INPUT_commodore_cluster_id}.yml
+    cat ${INPUT_commodore_cluster_id}.yml
+
+    git diff --exit-code --quiet || git commit -a -m "Enable cloudscale loadbalancer controller for ${INPUT_commodore_cluster_id}"
+
+    yq eval -i '.applications += ["cilium"]' ${INPUT_commodore_cluster_id}.yml
+    yq eval -i '.applications = (.applications | unique)' ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i '.parameters.networkpolicy.networkPlugin = "cilium"' ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i '.parameters.openshift4_monitoring.upstreamRules.networkPlugin = "cilium"' ${INPUT_commodore_cluster_id}.yml
+    yq eval -i '.parameters.openshift.infraID = "TO_BE_DEFINED"' ${INPUT_commodore_cluster_id}.yml
+    yq eval -i '.parameters.openshift.clusterID = "TO_BE_DEFINED"' ${INPUT_commodore_cluster_id}.yml
+
+    git diff --exit-code --quiet || git commit -a -m "Add Cilium addon to ${INPUT_commodore_cluster_id}"
+
+    git push
+
+    popd
+
+    commodore catalog compile ${INPUT_commodore_cluster_id} --push \
+      --dynamic-fact kubernetesVersion.major=1 \
+      --dynamic-fact kubernetesVersion.minor="$((${INPUT_image_minor}+13))" \
+      --dynamic-fact openshiftVersion.Major=${INPUT_image_major} \
+      --dynamic-fact openshiftVersion.Minor=${INPUT_image_minor}
+
+- match: Then I configure the OpenShift installer
+  description: |-
+    This step configures the OpenShift installer for the Cloudscale cluster by generating
+    the necessary installation files using Commodore.
+  inputs:
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: vault_address
+  run: |
+    set -euo pipefail
+
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+
+    ssh_private_key="$(pwd)/ssh_${INPUT_commodore_cluster_id}"
+    ssh_public_key="${ssh_private_key}.pub"
+
+    if vault kv get -format=json clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/cloudscale/ssh >/dev/null 2>&1; then
+      echo "SSH keypair for cluster ${INPUT_commodore_cluster_id} already exists in Vault, skipping generation."
+
+      vault kv get -format=json clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/cloudscale/ssh | \
+        jq -r '.data.data.private_key|@base64d' > ${ssh_private_key}
+
+      chmod 600 ${ssh_private_key}
+      ssh-keygen -f ${ssh_private_key} -y > ${ssh_public_key}
+
+    else
+      echo "Generating new SSH keypair for cluster ${INPUT_commodore_cluster_id}."
+
+      ssh-keygen -C "vault@${INPUT_commodore_cluster_id}" -t ed25519 -f $ssh_private_key -N ''
+
+      base64_no_wrap='base64'
+      if [[ "$OSTYPE" == "linux"* ]]; then
+        base64_no_wrap='base64 --wrap 0'
+      fi
+
+      vault kv put clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/cloudscale/ssh \
+        private_key=$(cat $ssh_private_key | eval "$base64_no_wrap")
+    fi
+
+    ssh-add $ssh_private_key
