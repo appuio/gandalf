@@ -158,14 +158,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if k == "ctrl+c" || k == "q" {
 				return m, tea.Quit
 			}
-			if k == "enter" && m.cmdState == cmdStateIdle {
+			if k == "enter" && (m.cmdState == cmdStateIdle || (m.cmdState == cmdStateFinished && m.cmdErr != nil)) {
 				m.cmdOuputViewport.SetContent("")
 				m.cmdOuputViewport.GotoTop()
 				var cmd tea.Cmd
 				m, cmd = m.runCmd()
 				cmds = append(cmds, cmd)
 			}
-			if k == "n" || k == "enter" && m.cmdState == cmdStateFinished {
+			if k == "n" || k == "enter" && m.cmdState == cmdStateFinished && m.cmdErr == nil {
 				_, _, _, err := m.executor.NextStep()
 				if err == io.EOF {
 					return m, tea.Quit
@@ -394,7 +394,11 @@ func (m model) footerView() string {
 		case cmdStateRunning:
 			help = infoStyleLeft.Render("q: quit")
 		case cmdStateFinished:
-			help = infoStyleLeft.Render("enter, n: next step • e: edit • q: quit")
+			if m.cmdErr == nil {
+				help = infoStyleLeft.Render("enter, n: next step • e: edit • q: quit")
+			} else {
+				help = infoStyleLeft.Render("enter: rerun • n: force next step • e: edit • q: quit")
+			}
 		}
 	}
 
@@ -481,8 +485,9 @@ func NewUI(exc *executor.Executor) *tea.Program {
 	m.spinner.Spinner = spinner.Globe
 	p := tea.NewProgram(
 		m,
-		tea.WithAltScreen(),       // use the full size of the terminal in its "alternate screen buffer"
-		tea.WithMouseCellMotion(), // turn on mouse support so we can track the mouse wheel
+		tea.WithAltScreen(), // use the full size of the terminal in its "alternate screen buffer"
+		// Disableing the mouse support allows the clickable links in the output to work on MacOS Terminal.app
+		// tea.WithMouseCellMotion(), // turn on mouse support so we can track the mouse wheel
 	)
 	// Store a reference to the program in the model, we use it for async IO updates
 	m.program = p
