@@ -20,6 +20,8 @@ steps:
 
     which docker >/dev/null 2>&1 && { echo "✅ docker is installed."; } || { echo "❌ docker is not installed. Please install docker to proceed."; exit 1; }
 
+    which glab >/dev/null 2>&1 && { echo "✅ glab (GitLab CLI) is installed."; } || { echo "❌ glab (GitLab CLI) is not installed. Please install glab to proceed."; exit 1; }
+
     which mc >/dev/null 2>&1 && { echo "✅ mc (MinIO Client) is installed."; } || { echo "❌ mc (MinIO Client) is not installed. Please install mc >= RELEASE.2024-01-18T07-03-39Z to proceed."; exit 1; }
     mc_version=$(mc --version | grep -Eo 'RELEASE[^ ]+')
     echo "$mc_version" | grep -E 'RELEASE\.202[4-9]-' >/dev/null 2>&1 && { echo "✅ mc version ${mc_version} is sufficient."; } || { echo "❌ mc version ${mc_version} is insufficient. Please upgrade mc to >= RELEASE.2024-01-18T07-03-39Z to proceed."; exit 1; }
@@ -258,7 +260,16 @@ steps:
   inputs:
   - name: commodore_cluster_id
   - name: commodore_tenant_id
+  - name: base_domain
+  - name: cluster_domain
   - name: vault_address
+  - name: redhat_pull_secret
+  - name: cloudscale_region
+  - name: bucket_user
+  - name: cloudscale_token
+  outputs:
+  - name: ignition_bootstrap
+  - name: ssh_public_key_path
   run: |
     set -euo pipefail
 
@@ -267,6 +278,8 @@ steps:
 
     ssh_private_key="$(pwd)/ssh_${INPUT_commodore_cluster_id}"
     ssh_public_key="${ssh_private_key}.pub"
+
+    env -i "ssh_public_key_path=$ssh_public_key" >> $OUTPUT
 
     if vault kv get -format=json clusters/kv/${INPUT_commodore_tenant_id}/${INPUT_commodore_cluster_id}/cloudscale/ssh >/dev/null 2>&1; then
       echo "SSH keypair for cluster ${INPUT_commodore_cluster_id} already exists in Vault, skipping generation."
@@ -292,3 +305,353 @@ steps:
     fi
 
     ssh-add $ssh_private_key
+
+    installer_dir="$(pwd)/target"
+    rm -rf "${installer_dir}"
+    mkdir -p "${installer_dir}"
+
+    cat > "${installer_dir}/install-config.yaml" <<EOF
+    apiVersion: v1
+    metadata:
+      name: ${INPUT_commodore_cluster_id}
+    baseDomain: ${INPUT_base_domain}
+    platform:
+      external:
+        platformName: cloudscale
+        cloudControllerManager: External
+    networking:
+      networkType: Cilium
+    pullSecret: |
+      ${INPUT_redhat_pull_secret}
+    sshKey: "$(cat $ssh_public_key)"
+    EOF
+
+    echo Running OpenShift installer to create manifests...
+    openshift-install --dir "${installer_dir}" create manifests
+
+    echo Copying machineconfigs...
+    machineconfigs=catalog/manifests/openshift4-nodes/10_machineconfigs.yaml
+    if [ -f $machineconfigs ];  then
+      yq --no-doc -s \
+        "\"${installer_dir}/openshift/99x_openshift-machineconfig_\" + .metadata.name" \
+        $machineconfigs
+    fi
+
+    echo Copying Cloudscale CCM manifests...
+    for f in catalog/manifests/cloudscale-cloud-controller-manager/*; do
+      cp $f ${installer_dir}/manifests/cloudscale_ccm_$(basename $f)
+    done
+    yq -i e ".stringData.access-token=\"${INPUT_cloudscale_token}\"" \
+      ${installer_dir}/manifests/cloudscale_ccm_01_secret.yaml
+
+    echo Copying Cilium OLM manifests...
+    cp catalog/manifests/cilium/olm/* ${installer_dir}/manifests/
+
+    gen_cluster_domain=$(yq e '.spec.baseDomain' \
+      "${installer_dir}/manifests/cluster-dns-02-config.yml")
+    if [ "$gen_cluster_domain" != "$INPUT_cluster_domain" ]; then
+      echo -e "\033[0;31mGenerated cluster domain doesn't match expected cluster domain: Got '$gen_cluster_domain', want '$INPUT_cluster_domain'\033[0;0m"
+      exit 1
+    else
+      echo -e "\033[0;32mGenerated cluster domain matches expected cluster domain.\033[0;0m"
+    fi
+
+    echo Running OpenShift installer to create ignition configs...
+    openshift-install --dir "${installer_dir}" \
+      create ignition-configs
+
+    mc alias set \
+      "${INPUT_commodore_cluster_id}" "https://objects.${INPUT_cloudscale_region}.cloudscale.ch" \
+      $(echo "$INPUT_bucket_user" | jq -r '.keys[0].access_key') \
+      $(echo "$INPUT_bucket_user" | jq -r '.keys[0].secret_key')
+
+    mc cp "${installer_dir}/bootstrap.ign" "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition/"
+
+    ignition_bootstrap=$(mc share download \
+      --json --expire=4h \
+      "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition/bootstrap.ign" | jq -r '.share')
+
+    env -i "ignition_bootstrap=$ignition_bootstrap" >> $OUTPUT
+
+    echo "✅ OpenShift installer configured successfully."
+
+- match: And I configure Terraform for team "(?P<team_name>[^"]+)"
+  description: |-
+    This step configures Terraform the Commodore rendered terraform configuration.
+  inputs:
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: cloudscale_region
+  - name: ssh_public_key_path
+  - name: hieradata_repo_user
+  - name: base_domain
+  - name: image_major
+  - name: image_minor
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    installer_dir="$(pwd)/target"
+
+    pushd "inventory/classes/${INPUT_commodore_tenant_id}/"
+
+    yq eval -i '.classes += ["global.distribution.openshift4.no-opsgenie"]' ${INPUT_commodore_cluster_id}.yml;
+    yq eval -i '.classes = (.classes | unique)' ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift.infraID = \"$(jq -r .infraID "${installer_dir}/metadata.json")\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift.clusterID = \"$(jq -r .clusterID "${installer_dir}/metadata.json")\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift.ssh_key = \"$(cat ${INPUT_ssh_public_key_path})\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    ca_cert=$(jq -r '.ignition.security.tls.certificateAuthorities[0].source' \
+      "${installer_dir}/master.ign" | \
+      awk -F ',' '{ print $2 }' | \
+      base64 --decode)
+
+    yq eval -i ".parameters.openshift4_terraform.terraform_variables.base_domain = \"${INPUT_base_domain}\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift4_terraform.terraform_variables.ignition_ca = \"${ca_cert}\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift4_terraform.terraform_variables.ssh_keys = [\"$(cat ${INPUT_ssh_public_key_path})\"]" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift4_terraform.terraform_variables.allocate_router_vip_for_lb_controller = true" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift4_terraform.terraform_variables.team = \"${MATCH_team_name}\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i ".parameters.openshift4_terraform.terraform_variables.hieradata_repo_user = \"${INPUT_hieradata_repo_user}\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    git commit -a -m "Setup cluster ${INPUT_commodore_cluster_id}"
+    git push
+
+    popd
+
+    commodore catalog compile ${INPUT_commodore_cluster_id} --push \
+      --dynamic-fact kubernetesVersion.major=1 \
+      --dynamic-fact kubernetesVersion.minor="$((${INPUT_image_minor}+13))" \
+      --dynamic-fact openshiftVersion.Major=${INPUT_image_major} \
+      --dynamic-fact openshiftVersion.Minor=${INPUT_image_minor}
+
+- match: Then I provision the loadbalancers
+  description: |-
+    This step provisions the load balancers for the Cloudscale OpenShift cluster using Terraform.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: control_vshn_api_token
+  - name: ignition_bootstrap
+  - name: hieradata_repo_token
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  - name: cluster_domain
+  outputs:
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    cat <<EOF > ./terraform.env
+    CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
+    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
+    TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
+    TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
+    GIT_AUTHOR_NAME=$(git config --global user.name)
+    GIT_AUTHOR_EMAIL=$(git config --global user.email)
+    HIERADATA_REPO_TOKEN=${INPUT_hieradata_repo_token}
+    EOF
+
+    tf_image=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.image" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+    tf_tag=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.tag" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+
+    echo "Using Terraform image: ${tf_image}:${tf_tag}"
+
+    base_dir=$(pwd)
+    alias terraform='touch .terraformrc; docker run --rm -e REAL_UID=$(id -u) -e TF_CLI_CONFIG_FILE=/tf/.terraformrc --env-file ${base_dir}/terraform.env -w /tf -v $(pwd):/tf --ulimit memlock=-1 "${tf_image}:${tf_tag}" /tf/terraform.sh'
+
+    gitlab_repository_url=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id} | jq -r '.gitRepo.url' | sed 's|ssh://||; s|/|:|')
+    gitlab_repository_name=${gitlab_repository_url##*/}
+    gitlab_catalog_project_id=$(curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/projects?simple=true&search=${gitlab_repository_name/.git}" | jq -r ".[] | select(.ssh_url_to_repo == \"${gitlab_repository_url}\") | .id")
+    gitlab_state_url="https://git.vshn.net/api/v4/projects/${gitlab_catalog_project_id}/terraform/state/cluster"
+
+    pushd catalog/manifests/openshift4-terraform/
+
+    terraform init \
+      "-backend-config=address=${gitlab_state_url}" \
+      "-backend-config=lock_address=${gitlab_state_url}/lock" \
+      "-backend-config=unlock_address=${gitlab_state_url}/lock" \
+      "-backend-config=username=${INPUT_gitlab_user_name}" \
+      "-backend-config=password=${INPUT_gitlab_api_token}" \
+      "-backend-config=lock_method=POST" \
+      "-backend-config=unlock_method=DELETE" \
+      "-backend-config=retry_wait_min=5"
+
+    cat > override.tf <<EOF
+    module "cluster" {
+      bootstrap_count          = 0
+      master_count             = 0
+      infra_count              = 0
+      worker_count             = 0
+      additional_worker_groups = {}
+    }
+    EOF
+    terraform apply -auto-approve -target "module.cluster.module.lb.module.hiera"
+
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    echo "@                                                                                       @"
+    echo "@  Please review and merge the LB hieradata MR listed in Terraform output hieradata_mr. @"
+    echo "@                                                                                       @"
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    while (GITLAB_HOST=git.vshn.net GITLAB_TOKEN="${INPUT_gitlab_api_token}" glab mr list -R=appuio/appuio_hieradata | grep "${INPUT_commodore_cluster_id}")
+    do
+      sleep 10
+    done
+    echo PR merged, waiting for CI to finish...
+    sleep 10
+    while (GITLAB_HOST=git.vshn.net GITLAB_TOKEN="${INPUT_gitlab_api_token}" glab mr list -R=appuio/appuio_hieradata | grep "running")
+    do
+      sleep 10
+    done
+
+    terraform apply -auto-approve
+
+    lb1=$(terraform state show "module.cluster.module.lb.cloudscale_server.lb[0]" | grep fqdn | awk '{print $2}' | tr -d ' "\r\n')
+    lb2=$(terraform state show "module.cluster.module.lb.cloudscale_server.lb[1]" | grep fqdn | awk '{print $2}' | tr -d ' "\r\n')
+
+    echo "Loadbalancer FQDNs: $lb1 , $lb2"
+
+    while true; do
+      curl --connect-timeout 1 "http://api.${INPUT_cluster_domain}:6443" &>/dev/null || exit_code=$?
+      if [ $exit_code -eq 52 ]; then
+        echo HAproxy up
+        break
+      else
+        echo -n "."
+        sleep 5
+      fi
+    done
+
+    echo "updating ssh config..."
+    ssh management2.corp.vshn.net "sshop --output-archive /dev/stdout" | tar -C ~ -xzf -
+    echo done
+
+    ssh "${lb1}" hostname -f
+    ssh "${lb2}" hostname -f
+
+    env -i "lb_fqdn_1=$lb1" >> $OUTPUT
+    env -i "lb_fqdn_2=$lb2" >> $OUTPUT
+
+- match: And I provision the bootstrap node
+  description: |-
+    This step provisions the bootstrap node for the Cloudscale OpenShift cluster using Terraform.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: control_vshn_api_token
+  - name: ignition_bootstrap
+  - name: hieradata_repo_token
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+    installer_dir="$(pwd)/target"
+
+    cat <<EOF > ./terraform.env
+    CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
+    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
+    TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
+    TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
+    GIT_AUTHOR_NAME=$(git config --global user.name)
+    GIT_AUTHOR_EMAIL=$(git config --global user.email)
+    HIERADATA_REPO_TOKEN=${INPUT_hieradata_repo_token}
+    EOF
+
+    tf_image=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.image" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+    tf_tag=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.tag" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+
+    echo "Using Terraform image: ${tf_image}:${tf_tag}"
+
+    base_dir=$(pwd)
+    alias terraform='touch .terraformrc; docker run --rm -e REAL_UID=$(id -u) -e TF_CLI_CONFIG_FILE=/tf/.terraformrc --env-file ${base_dir}/terraform.env -w /tf -v $(pwd):/tf --ulimit memlock=-1 "${tf_image}:${tf_tag}" /tf/terraform.sh'
+
+    gitlab_repository_url=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id} | jq -r '.gitRepo.url' | sed 's|ssh://||; s|/|:|')
+    gitlab_repository_name=${gitlab_repository_url##*/}
+    gitlab_catalog_project_id=$(curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/projects?simple=true&search=${gitlab_repository_name/.git}" | jq -r ".[] | select(.ssh_url_to_repo == \"${gitlab_repository_url}\") | .id")
+    gitlab_state_url="https://git.vshn.net/api/v4/projects/${gitlab_catalog_project_id}/terraform/state/cluster"
+
+    pushd catalog/manifests/openshift4-terraform/
+
+    terraform init \
+      "-backend-config=address=${gitlab_state_url}" \
+      "-backend-config=lock_address=${gitlab_state_url}/lock" \
+      "-backend-config=unlock_address=${gitlab_state_url}/lock" \
+      "-backend-config=username=${INPUT_gitlab_user_name}" \
+      "-backend-config=password=${INPUT_gitlab_api_token}" \
+      "-backend-config=lock_method=POST" \
+      "-backend-config=unlock_method=DELETE" \
+      "-backend-config=retry_wait_min=5"
+
+    cat > override.tf <<EOF
+    module "cluster" {
+      bootstrap_count          = 1
+      master_count             = 0
+      infra_count              = 0
+      worker_count             = 0
+      additional_worker_groups = {}
+    }
+    EOF
+    terraform apply -auto-approve
+
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    echo "@                                                                                       @"
+    echo "@  Please review and merge the LB hieradata MR listed in Terraform output hieradata_mr. @"
+    echo "@                                                                                       @"
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    while (GITLAB_HOST=git.vshn.net GITLAB_TOKEN="${INPUT_gitlab_api_token}" glab mr list -R=appuio/appuio_hieradata | grep "${INPUT_commodore_cluster_id}")
+    do
+      sleep 10
+    done
+    echo PR merged, waiting for CI to finish...
+    sleep 10
+    while (GITLAB_HOST=git.vshn.net GITLAB_TOKEN="${INPUT_gitlab_api_token}" glab mr list -R=appuio/appuio_hieradata | grep "running")
+    do
+      sleep 10
+    done
+
+    ssh "${INPUT_lb_fqdn_1}" sudo puppetctl run
+    ssh "${INPUT_lb_fqdn_2}" sudo puppetctl run
+
+    API_URL=$(yq e '.clusters[0].cluster.server' "${installer_dir}/auth/kubeconfig")
+    while ! curl --connect-timeout 1 "${API_URL}/healthz" -k &>/dev/null; do
+      echo -n "."
+      sleep 5
+    done && echo "✅ API is up"

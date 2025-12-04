@@ -12,4 +12,6 @@ Then I set secrets in Vault
 And I check the cluster domain
 And I prepare the cluster repository
 Then I configure the OpenShift installer
-# And I run the OpenShift Installer
+And I configure Terraform for team "aldebaran"
+Then I provision the loadbalancers
+And I provision the bootstrap node
