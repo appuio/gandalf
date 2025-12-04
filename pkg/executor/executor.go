@@ -176,6 +176,10 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 		return nil, fmt.Errorf("failed to create outputs dir: %w", err)
 	}
 	outputFile := filepath.Join(outputDir, "outputs.env")
+	outputFile, err = filepath.Abs(outputFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path of outputs file: %w", err)
+	}
 	cmd.Env = append(cmd.Env, fmt.Sprintf("OUTPUT=%s", outputFile))
 	return &Cmd{
 		Cmd:            cmd,
