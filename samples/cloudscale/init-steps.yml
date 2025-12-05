@@ -22,6 +22,8 @@ steps:
 
     which glab >/dev/null 2>&1 && { echo "✅ glab (GitLab CLI) is installed."; } || { echo "❌ glab (GitLab CLI) is not installed. Please install glab to proceed."; exit 1; }
 
+    which host >/dev/null 2>&1 && { echo "✅ host (DNS lookup utility) is installed."; } || { echo "❌ host (DNS lookup utility) is not installed. Please install host to proceed."; exit 1; }
+
     which mc >/dev/null 2>&1 && { echo "✅ mc (MinIO Client) is installed."; } || { echo "❌ mc (MinIO Client) is not installed. Please install mc >= RELEASE.2024-01-18T07-03-39Z to proceed."; exit 1; }
     mc_version=$(mc --version | grep -Eo 'RELEASE[^ ]+')
     echo "$mc_version" | grep -E 'RELEASE\.202[4-9]-' >/dev/null 2>&1 && { echo "✅ mc version ${mc_version} is sufficient."; } || { echo "❌ mc version ${mc_version} is insufficient. Please upgrade mc to >= RELEASE.2024-01-18T07-03-39Z to proceed."; exit 1; }
@@ -515,6 +517,15 @@ steps:
     EOF
     terraform apply -auto-approve -target "module.cluster.module.lb.module.hiera"
 
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    echo "@                                                                                       @"
+    echo "@  Please add the DNS records shown in the Terraform output to your DNS provider.       @"
+    echo "@  Most probably in https://git.vshn.net/vshn/vshn_zonefiles                            @"
+    echo "@                                                                                       @"
+    echo "@  Waiting for record to propagate...                                                   @"
+    echo "@                                                                                       @"
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    while ! host "api.${INPUT_cluster_domain}" ; do ; sleep 15 ; done
     echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
     echo "@                                                                                       @"
     echo "@  Please review and merge the LB hieradata MR listed in Terraform output hieradata_mr. @"
