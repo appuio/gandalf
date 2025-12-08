@@ -3,11 +3,13 @@ package ui
 import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss/v2"
 )
 
 type varInputModel struct {
-	textInput textinput.Model
-	varName   string
+	textInput   textinput.Model
+	varName     string
+	description string
 }
 
 func newVarInputModel() varInputModel {
@@ -27,5 +29,9 @@ func (m varInputModel) Update(msg tea.Msg) (varInputModel, tea.Cmd) {
 }
 
 func (m varInputModel) View() string {
-	return "Editing variable: " + m.varName + "\n\n" + m.textInput.View()
+	d := m.description
+	if d != "" {
+		d = d + "\n\n"
+	}
+	return lipgloss.NewStyle().Bold(true).Render("Editing variable: "+m.varName) + "\n\n" + d + m.textInput.View()
 }

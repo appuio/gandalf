@@ -268,7 +268,18 @@ func (m model) emptyInputs() []string {
 }
 
 func (m model) openInputOverlay(varName string) (model, tea.Cmd) {
+	var description string
+	_, _, step, err := m.executor.CurrentStep()
+	if err == nil {
+		for _, input := range step.MatchedStep.Inputs {
+			if input.Name == varName {
+				description = input.Description
+				break
+			}
+		}
+	}
 	m.overlayVarInput.varName = varName
+	m.overlayVarInput.description = description
 	m.uiState = uiStateInputOverlay
 	m.overlayVarInput.textInput.SetValue(m.executor.StateManager.Outputs()[varName].Value)
 	return m, m.overlayVarInput.textInput.Focus()

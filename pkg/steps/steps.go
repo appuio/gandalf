@@ -17,11 +17,13 @@ type Interaction struct {
 }
 
 type Input struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 type Output struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 type Step struct {

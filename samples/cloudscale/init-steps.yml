@@ -36,7 +36,6 @@ steps:
     This step checks if the `openshift-install` binary for the specified OpenShift version is available in your PATH.
 
     If not found, it provides instructions on how to download it.
-    Direct download links:
   run: |
     set -euo pipefail
 
@@ -71,7 +70,21 @@ steps:
     This step checks that you have access to the Commodore API and the cluster ID is valid.
   inputs:
   - name: commodore_api_url
+    description: |-
+      URL of the Commodore API to use for retrieving cluster information.
+
+      Use https://api.syn.vshn.net as the Commodore API URL for production clusters.
+      Use https://api-int.syn.vshn.net for test clusters.
+
+      You might use the WebUI at https://control.vshn.net/syn/lieutenantapiendpoints to create and manage your clusters.
+
   - name: commodore_cluster_id
+    description: |-
+      Project Syn cluster ID for the cluster to be set up.
+
+      In the form of c-example-infra-prod1.
+
+      You might use the WebUI at https://control.vshn.net/syn/lieutenantapiendpoints to create and manage your clusters.
   outputs:
   - name: commodore_tenant_id
   - name: cloudscale_region
@@ -90,9 +103,18 @@ steps:
 - match: And Cloudscale API tokens
   inputs:
   - name: cloudscale_token
+    description: |-
+      Cloudscale API token with read+write permissions.
+
+      Used for setting up the cluster and for the machine api provider.
   - name: cloudscale_token_floaty
+    description: |-
+      Cloudscale API token with read+write permissions.
+
+      Used for managing the floating IPs.
   description: |-
-    Create 2 new cloudscale API tokens with read+write permissions and name them <cluster_id> and <cluster_id>_floaty on control.cloudscale.ch/service/<your-project>/api-token.
+    Create 2 new cloudscale API tokens with read+write permissions and name them
+    <cluster_id> and <cluster_id>_floaty on control.cloudscale.ch/service/<your-project>/api-token.
 
     This step currently does not validate the tokens, but ensures they are provided.
 - match: And a personal VSHN GitLab access token
@@ -104,7 +126,13 @@ steps:
     This step currently does not validate the token, but ensures it is provided.
   inputs:
   - name: gitlab_api_token
+    description: |-
+      Personal access token for VSHN GitLab with the "api" scope.
+
+      Create the token at https://git.vshn.net/-/user_settings/personal_access_tokens with the "api" scope.
   - name: gitlab_user_name
+    description: |-
+      Your GitLab user name.
 - match: And a control.vshn.net Servers API token
   description: |-
     This step ensures that you have provided an API token for control.vshn.net Servers API.
@@ -114,6 +142,12 @@ steps:
     This step currently does not validate the token, but ensures it is provided.
   inputs:
   - name: control_vshn_api_token
+    description: |-
+      API token for control.vshn.net Servers API.
+
+      Used to create the puppet based LBs.
+
+      Be extra careful with the IP allowlist.
 - match: And basic cluster information
   description: |-
     This step collects two essential pieces of information required for cluster setup: the base domain and the Red Hat pull secret.
@@ -122,8 +156,17 @@ steps:
     Get a pull secret from https://cloud.redhat.com/openshift/install/pull-secret.
   inputs:
   - name: base_domain
-  - name: redhat_pull_secret
+    description: |-
+      The base domain for the cluster without the cluster ID prefix and the last dot.
 
+      Example: `appuio-beta.ch`
+
+      See https://kb.vshn.ch/oc4/explanations/dns_scheme.html for more information about the base domain.
+  - name: redhat_pull_secret
+    description: |-
+      Red Hat pull secret for accessing Red Hat container images.
+
+      Get a pull secret from https://cloud.redhat.com/openshift/install/pull-secret.
 - match: Then I set secrets in Vault
   description: |-
     This step stores the collected secrets and tokens in the ProjectSyn Vault.
