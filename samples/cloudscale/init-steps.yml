@@ -58,6 +58,7 @@ steps:
     This step retrieves the Commodore tenant ID associated with the given lieutenant cluster ID.
 
     Use https://api.syn.vshn.net as the Commodore API URL for production clusters.
+    You might use the WebUI at https://control.vshn.net/syn/lieutenantapiendpoints to create and manage your clusters.
 
     For customer clusters ensure the following facts are set:
     * sales_order: Name of the sales order to which the cluster is billed, such as S10000
