@@ -569,18 +569,6 @@ steps:
 
     echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
     echo "@                                                                                       @"
-    echo "@  Please add the DNS records shown in the Terraform output to your DNS provider.       @"
-    echo "@  Most probably in https://git.vshn.net/vshn/vshn_zonefiles                            @"
-    echo "@                                                                                       @"
-    echo "@  Waiting for record to propagate...                                                   @"
-    echo "@                                                                                       @"
-    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
-    while ! (host "api.${INPUT_cluster_domain}")
-    do
-      sleep 15
-    done
-    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
-    echo "@                                                                                       @"
     echo "@  Please review and merge the LB hieradata MR listed in Terraform output hieradata_mr. @"
     echo "@                                                                                       @"
     echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
@@ -596,6 +584,18 @@ steps:
     done
 
     terraform apply -auto-approve
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    echo "@                                                                                       @"
+    echo "@  Please add the DNS records shown in the Terraform output to your DNS provider.       @"
+    echo "@  Most probably in https://git.vshn.net/vshn/vshn_zonefiles                            @"
+    echo "@                                                                                       @"
+    echo "@  Waiting for record to propagate...                                                   @"
+    echo "@                                                                                       @"
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    while ! (host "api.${INPUT_cluster_domain}")
+    do
+      sleep 15
+    done
 
     lb1=$(terraform state show "module.cluster.module.lb.cloudscale_server.lb[0]" | grep fqdn | awk '{print $2}' | tr -d ' "\r\n')
     lb2=$(terraform state show "module.cluster.module.lb.cloudscale_server.lb[1]" | grep fqdn | awk '{print $2}' | tr -d ' "\r\n')
