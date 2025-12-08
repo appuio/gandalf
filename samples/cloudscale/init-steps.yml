@@ -172,10 +172,14 @@ steps:
   description: |-
     This step stores the collected secrets and tokens in the ProjectSyn Vault.
   inputs:
+  - name: vault_address
+    description: |-
+      Address of the Vault server associated with the Lieutenant API to store cluster secrets.
+
+      https://vault-prod.syn.vshn.net/ for production clusters.
   - name: commodore_cluster_id
   - name: commodore_tenant_id
   - name: bucket_user
-  - name: vault_address
   - name: cloudscale_token
   - name: cloudscale_token_floaty
   outputs:
