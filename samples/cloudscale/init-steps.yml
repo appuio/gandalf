@@ -430,6 +430,7 @@ steps:
   description: |-
     This step configures Terraform the Commodore rendered terraform configuration.
   inputs:
+  - name: commodore_api_url
   - name: commodore_cluster_id
   - name: commodore_tenant_id
   - name: cloudscale_region
