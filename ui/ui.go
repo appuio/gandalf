@@ -163,7 +163,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var cmd tea.Cmd
 				m, cmd = m.openInputOverlay(emptyInputs[0])
 				cmds = append(cmds, cmd)
-			} else if k == "enter" && (m.cmdState == cmdStateIdle || (m.cmdState == cmdStateFinished && m.cmdErr != nil)) {
+			} else if (k == "enter" && (m.cmdState == cmdStateIdle || (m.cmdState == cmdStateFinished && m.cmdErr != nil))) ||
+				(k == "r" && m.cmdState == cmdStateFinished) {
 				m.cmdOutputViewport.SetContent("")
 				m.cmdOutputViewport.GotoTop()
 				var cmd tea.Cmd
@@ -439,9 +440,9 @@ func (m model) footerView() string {
 			help = infoStyleLeft.Render("q: quit")
 		case cmdStateFinished:
 			if m.cmdErr == nil {
-				help = infoStyleLeft.Render("enter, n: next step • e: edit • q: quit")
+				help = infoStyleLeft.Render("enter, n: next step • r: rerun • e: edit • q: quit")
 			} else {
-				help = infoStyleLeft.Render("enter: rerun • n: force next step • e: edit • q: quit")
+				help = infoStyleLeft.Render("enter, r: rerun • n: force next step • e: edit • q: quit")
 			}
 		}
 	}
