@@ -355,6 +355,9 @@ steps:
         private_key=$(cat $ssh_private_key | eval "$base64_no_wrap")
     fi
 
+    echo Adding SSH private key to ssh-agent...
+    echo You might need to start the ssh-agent first using: eval "\$(ssh-agent)"
+    echo +ssh-add $ssh_private_key
     ssh-add $ssh_private_key
 
     installer_dir="$(pwd)/target"
