@@ -30,6 +30,9 @@ type Executor struct {
 	StateManager *state.StateManager
 
 	preparedMatches map[string]Step
+
+	// ShellRCFile is an optional path to a shell rc file to source before executing any step scripts.
+	ShellRCFile string
 }
 
 func (e *Executor) Prepare() error {
@@ -160,6 +163,10 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 	script := matchedStep.MatchedStep.Run
 	if script == "" {
 		script = ":"
+	}
+
+	if e.ShellRCFile != "" {
+		script = fmt.Sprintf("test -r %s && source %s\n%s", e.ShellRCFile, e.ShellRCFile, script)
 	}
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)

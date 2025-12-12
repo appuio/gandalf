@@ -20,6 +20,8 @@ func init() {
 }
 
 type runOptions struct {
+	// ShellRCFile is an optional path to a shell rc file to source before executing any step scripts.
+	ShellRCFile string
 }
 
 func NewRunCommand() *cobra.Command {
@@ -33,6 +35,7 @@ func NewRunCommand() *cobra.Command {
 		Args:      cobra.MinimumNArgs(2),
 		RunE:      ro.Run,
 	}
+	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", "~/.guided-setup/rc", "Path to a shell rc file to source before executing any step scripts.")
 	return c
 }
 
@@ -78,6 +81,8 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 		Workflow:     wf,
 		Steps:        collectedSteps,
 		StateManager: stateManager,
+
+		ShellRCFile: ro.ShellRCFile,
 	}
 
 	if err := executor.Prepare(); err != nil {
