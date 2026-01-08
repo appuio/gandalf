@@ -1,0 +1,473 @@
+steps:
+- match: Then I confirm cluster deletion
+  description: |-
+    This step asks you to confirm with 4 eyes whether this cluster is really to be deleted.
+  inputs:
+  - name: commodore_cluster_id
+  - name: 4_eye_confirmation
+    description: |-
+      Please confirm the commodore cluster ID of the cluster you wish to delete.
+
+      Confirm this cluster ID according to the 4-eye principle. You and one colleague should agree on the cluster that is to be deleted.
+  run: |
+    if [[ ${INPUT_commodore_cluster_id} != ${INPUT_4_eye_confirmation} ]]
+    then
+      echo "Cluster domain and confirmation do not match."
+      exit 1
+    fi
+- match: Then I save the loadbalancer metadata
+  description: |-
+    This step gathers metadata on the LoadBalancer instances (such as their icinga zone and backup server), such that they can be properly decommissioned down the line.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: control_vshn_api_token
+  - name: ignition_bootstrap
+  - name: hieradata_repo_token
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  - name: cluster_domain
+  outputs:
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  - name: lb_backup_1
+  - name: lb_backup_2
+  - name: lb_icinga_1
+  - name: lb_icinga_2
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    cat <<EOF > ./terraform.env
+    CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
+    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
+    TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
+    TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
+    GIT_AUTHOR_NAME=$(git config --global user.name)
+    GIT_AUTHOR_EMAIL=$(git config --global user.email)
+    HIERADATA_REPO_TOKEN=${INPUT_hieradata_repo_token}
+    EOF
+
+    tf_image=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.image" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+    tf_tag=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.tag" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+
+    echo "Using Terraform image: ${tf_image}:${tf_tag}"
+
+    base_dir=$(pwd)
+    alias terraform='touch .terraformrc; docker run --rm -e REAL_UID=$(id -u) -e TF_CLI_CONFIG_FILE=/tf/.terraformrc --env-file ${base_dir}/terraform.env -w /tf -v $(pwd):/tf --ulimit memlock=-1 "${tf_image}:${tf_tag}" /tf/terraform.sh'
+
+    gitlab_repository_url=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id} | jq -r '.gitRepo.url' | sed 's|ssh://||; s|/|:|')
+    gitlab_repository_name=${gitlab_repository_url##*/}
+    gitlab_catalog_project_id=$(curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/projects?simple=true&search=${gitlab_repository_name/.git}" | jq -r ".[] | select(.ssh_url_to_repo == \"${gitlab_repository_url}\") | .id")
+    gitlab_state_url="https://git.vshn.net/api/v4/projects/${gitlab_catalog_project_id}/terraform/state/cluster"
+
+    pushd catalog/manifests/openshift4-terraform/
+
+    terraform init \
+      "-backend-config=address=${gitlab_state_url}" \
+      "-backend-config=lock_address=${gitlab_state_url}/lock" \
+      "-backend-config=unlock_address=${gitlab_state_url}/lock" \
+      "-backend-config=username=${INPUT_gitlab_user_name}" \
+      "-backend-config=password=${INPUT_gitlab_api_token}" \
+      "-backend-config=lock_method=POST" \
+      "-backend-config=unlock_method=DELETE" \
+      "-backend-config=retry_wait_min=5"
+
+    cat > override.tf <<EOF
+    module "cluster" {
+      bootstrap_count          = 0
+      master_count             = 0
+      infra_count              = 0
+      worker_count             = 0
+      additional_worker_groups = {}
+    }
+    EOF
+
+    lb1=$(terraform state show "module.cluster.module.lb.cloudscale_server.lb[0]" | grep fqdn | awk '{print $2}' | tr -d ' "\r\n')
+    lb2=$(terraform state show "module.cluster.module.lb.cloudscale_server.lb[1]" | grep fqdn | awk '{print $2}' | tr -d ' "\r\n')
+
+    backup1=$(ssh "$lb1" "sudo grep 'server =' /etc/burp/burp.conf  | awk '{ print \$3 }'" )
+    backup2=$(ssh "$lb2" "sudo grep 'server =' /etc/burp/burp.conf  | awk '{ print \$3 }'" )
+
+    icinga1=$(ssh "$lb1" "sudo grep 'ParentZone' /etc/icinga2/constants.conf | awk '{  print substr(\$4, 2, length(\$4)-2) }'" )
+    icinga2=$(ssh "$lb2" "sudo grep 'ParentZone' /etc/icinga2/constants.conf | awk '{  print substr(\$4, 2, length(\$4)-2) }'" )
+
+    env -i "lb_fqdn_1=$lb1" >> $OUTPUT
+    env -i "lb_fqdn_2=$lb2" >> $OUTPUT
+    env -i "lb_backup_1=$backup1" >> $OUTPUT
+    env -i "lb_backup_2=$backup2" >> $OUTPUT
+    env -i "lb_icinga_1=$icinga1" >> $OUTPUT
+    env -i "lb_icinga_2=$icinga2" >> $OUTPUT
+    popd
+
+
+- match: And I decommission Terraform resources
+  description: |-
+    This step decommissions all Terraform resources for the cluster.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: control_vshn_api_token
+  - name: ignition_bootstrap
+  - name: hieradata_repo_token
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+    installer_dir="$(pwd)/target"
+
+    cat <<EOF > ./terraform.env
+    CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
+    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
+    TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
+    TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
+    GIT_AUTHOR_NAME=$(git config --global user.name)
+    GIT_AUTHOR_EMAIL=$(git config --global user.email)
+    HIERADATA_REPO_TOKEN=${INPUT_hieradata_repo_token}
+    EOF
+
+    tf_image=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.image" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+    tf_tag=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.tag" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+
+    echo "Using Terraform image: ${tf_image}:${tf_tag}"
+
+    base_dir=$(pwd)
+    alias terraform='touch .terraformrc; docker run --rm -e REAL_UID=$(id -u) -e TF_CLI_CONFIG_FILE=/tf/.terraformrc --env-file ${base_dir}/terraform.env -w /tf -v $(pwd):/tf --ulimit memlock=-1 "${tf_image}:${tf_tag}" /tf/terraform.sh'
+
+    gitlab_repository_url=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id} | jq -r '.gitRepo.url' | sed 's|ssh://||; s|/|:|')
+    gitlab_repository_name=${gitlab_repository_url##*/}
+    gitlab_catalog_project_id=$(curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/projects?simple=true&search=${gitlab_repository_name/.git}" | jq -r ".[] | select(.ssh_url_to_repo == \"${gitlab_repository_url}\") | .id")
+    gitlab_state_url="https://git.vshn.net/api/v4/projects/${gitlab_catalog_project_id}/terraform/state/cluster"
+
+    pushd catalog/manifests/openshift4-terraform/
+
+    terraform init \
+      "-backend-config=address=${gitlab_state_url}" \
+      "-backend-config=lock_address=${gitlab_state_url}/lock" \
+      "-backend-config=unlock_address=${gitlab_state_url}/lock" \
+      "-backend-config=username=${INPUT_gitlab_user_name}" \
+      "-backend-config=password=${INPUT_gitlab_api_token}" \
+      "-backend-config=lock_method=POST" \
+      "-backend-config=unlock_method=DELETE" \
+      "-backend-config=retry_wait_min=5"
+
+    terraform state rm "module.cluster.module.lb.module.hiera[0].gitfile_checkout.appuio_hieradata"
+
+    # Suppress errors on the first run; it is expected to fail
+    terraform destroy --auto-approve || true
+
+    terraform destroy --auto-approve
+    popd
+
+- match: Then I delete Cloudscale server groups
+  description: |-
+    This step cleans up server groups configured for this cluster on Cloudscale.
+  inputs:
+  - name: cloudscale_token
+  - name: commodore_cluster_id
+  run: |
+    for server_group_uuid in $(curl -H"Authorization: Bearer ${INPUT_cloudscale_token}" \
+      https://api.cloudscale.ch/v1/server-groups | \
+      jq --arg cluster_id "${INPUT_commodore_cluster_id}" \
+      '.[]|select(.name|startswith($cluster_id))|.uuid'); do
+      curl -H"Authorization: Bearer ${INPUT_cloudscale_token}" \
+        "https://api.cloudscale.ch/v1/server-groups/${server_group_uuid}" \
+        -XDELETE
+    done
+
+- match: And I delete all S3 buckets
+  description: |-
+    This step deletes the cluster's associated S3 buckets from Cloudscale.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_region
+  - name: commodore_cluster_id
+  run: |
+    # Use already exiting bucket user
+    response=$(curl -sH "Authorization: Bearer ${INPUT_cloudscale_token}" \
+      https://api.cloudscale.ch/v1/objects-users | \
+      jq -e ".[] | select(.display_name == \"${INPUT_commodore_cluster_id}\")")
+
+    # configure minio client to use the bucket
+    mc alias set \
+      "${INPUT_commodore_cluster_id}" "https://objects.${INPUT_cloudscale_region}.cloudscale.ch" \
+      $(echo $response | jq -r '.keys[0].access_key') \
+      $(echo $response | jq -r '.keys[0].secret_key')
+
+    # delete bootstrap-ignition bucket (should already be deleted after setup)
+    mc rb "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition" --force
+
+    # delete image-registry bucket
+    mc rb "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-image-registry" --force
+
+    # delete Loki logstore bucket
+    mc rb "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-logstore" --force
+
+
+- match: And I delete the cluster's API tokens
+  description: |-
+    This step deletes the cluster's associated Cloudscale API tokens from Cloudscale
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: cloudscale_region
+  - name: commodore_cluster_id
+  run: |
+    echo '##############################################################'
+    echo '#                                                            #'
+    echo '#   Please delete the Cloudscale token and Floaty token      #'
+    echo '#   associated with this cluster via the Cloudscale console. #'
+    echo '#                                                            #'
+    echo '##############################################################'
+
+    echo -n "Checking for deletion of main Cloudscale token ..."
+    while curl -sH "Authorization: Bearer ${INPUT_cloudscale_token}" https://api.cloudscale.ch/v1/flavors  --fail > /dev/null
+    do
+      echo -n .
+      sleep 3
+    done
+    echo " Success."
+
+    echo -n "Checking for deletion of Floaty Cloudscale token ..."
+    while curl -sH "Authorization: Bearer ${INPUT_cloudscale_token_floaty}" https://api.cloudscale.ch/v1/flavors  --fail > /dev/null
+    do
+      echo -n .
+      sleep 3
+    done
+    echo " Success."
+
+- match: And I decommission the LoadBalancers
+  description: |-
+    This step decommissions resources associated with the Puppet managed LoadBalancers.
+  inputs:
+  - name: commodore_cluster_id
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  - name: lb_backup_1
+  - name: lb_backup_2
+  - name: lb_icinga_1
+  - name: lb_icinga_2
+  run: |
+    echo "# Clearing encdata caches ... #"
+    ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_1}.yaml"
+    ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_2}.yaml"
+    echo "# Cleared encdata caches. #"
+    echo
+    echo "# Cleaning up LBs in icinga ... #"
+    for parent_zone in `echo "$INPUT_lb_icinga_1" "$INPUT_lb_icinga_2" | sort | uniq`
+    do
+      if [ "$parent_zone" != "master" ]; then
+        icinga_host="$parent_zone"
+      else
+        icinga_host="master3.prod.monitoring.vshn.net"
+      fi
+      echo "  "Cleaning up LB from $icinga_host ...
+      ssh "${icinga_host}" "sudo rm -rf /var/lib/icinga2/api/zones/${INPUT_lb_fqdn_1}"
+      ssh "${icinga_host}" "sudo rm -rf /var/lib/icinga2/api/zones/${INPUT_lb_fqdn_2}"
+      if [ "$parent_zone" != "master" ]; then
+        ssh "${icinga_host}" sudo puppetctl run
+      fi
+      ssh master3.prod.monitoring.vshn.net sudo puppetctl run
+    done
+    echo "# Cleaned up LBs in icinga. #"
+    echo
+    echo "# Removing LBs from nodes hieradata ... #"
+    if [ -e nodes_hieradata ]
+    then
+      rm -rf nodes_hieradata
+    fi
+    git clone git@git.vshn.net:vshn-puppet/nodes_hieradata.git
+    pushd nodes_hieradata
+
+    git rm ${INPUT_lb_fqdn_1}.yaml || true
+    git rm ${INPUT_lb_fqdn_2}.yaml || true
+
+    if not git diff-index --quiet HEAD
+    then
+      git commit -m"Decommission LBs for ${INPUT_commodore_cluster_id}"
+      git push origin master
+    fi
+
+    popd
+    echo "# Removed LBs from nodes hieradata. #"
+    echo
+    echo "# Removing cluster from Appuio hieradata ... #"
+    if [ -e appuio_hieradata ]
+    then
+      rm -rf appuio_hieradata
+    fi
+    git clone git@git.vshn.net:appuio/appuio_hieradata.git
+    pushd appuio_hieradata
+
+    git rm -rf lbaas/${INPUT_commodore_cluster_id}*
+
+    if not git diff-index --quiet HEAD
+    then
+      git commit -m"Decommission ${INPUT_commodore_cluster_id}"
+      git push origin master
+    fi
+    popd
+    echo "# Removed cluster from Appuio hieradata. #"
+    echo
+    echo "# Deleting backups from Burp server ... #"
+    for lb in "${INPUT_lb_fqdn_1}" "${INPUT_lb_fqdn_2}"
+    do
+      for backup_server in "${INPUT_lb_backup_1}" "${INPUT_lb_backup_2}"
+      do
+        ssh "$backup_server" "sudo rm /var/lib/burp/CA/${lb}.crt"
+        ssh "$backup_server" "sudo rm /var/lib/burp/CA/${lb}.csr"
+        backup="/var/lib/burp/${lb}"
+        echo "$backup"
+        ssh "$backup_server" "sudo rm -rf ${backup}"
+      done
+    done
+    echo "# Deleted backups from Burp server. #"
+
+- match: And I remove the cluster's DNS entries
+  description: |-
+    In this step, you must manually remove any DNS entries associated with the cluster from https://git.vshn.net/vshn/vshn_zonefiles.
+  run: |
+    echo '#########################################################################'
+    echo '#                                                                       #'
+    echo "#  Please manually delete the cluster's DNS entries before proceeding.  #"
+    echo '#                                                                       #'
+    echo '#########################################################################'
+    sleep 2
+
+- match: Then I delete the cluster's Vault secrets
+  description: |-
+    This step cleans up all the cluster's Vault secrets.
+  inputs:
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  - name: vault_address
+  - name: image_major
+  - name: image_minor
+  run: |
+    echo WARNING: Using hardcoded dynamic facts!
+    echo This is only required because the setup does not yet include synthesis.
+    echo Once the setup proceeds past cluster synthesis, please update this script
+    echo to no longer use hardcoded dynamic facts.
+    echo
+    sleep 5 # to make sure user sees the warning
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+    commodore catalog compile ${INPUT_commodore_cluster_id} \
+      --dynamic-fact kubernetesVersion.major=1 \
+      --dynamic-fact kubernetesVersion.minor="$((${INPUT_image_minor}+13))" \
+      --dynamic-fact openshiftVersion.Major=${INPUT_image_major} \
+      --dynamic-fact openshiftVersion.Minor=${INPUT_image_minor}
+
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+
+    for secret in $(find catalog/refs/ -type f -printf "clusters/kv/%P\n" \
+        | sed -r 's#(.*)/.*#\1#' | grep -v '__shared__/__shared__' \
+        | sort -u);
+    do
+      vault kv delete "$secret"
+    done
+
+- match: And I delete the cluster's OpsGenie heartbeat
+  description: |-
+    This step deletes the cluster's OpsGenie heartbeat.
+  inputs:
+  - name: vault_address
+  run: |
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+    OPSGENIE_KEY=$(vault kv get -format=json \
+      clusters/kv/__shared__/__shared__/opsgenie/aldebaran | \
+      jq -r '.data.data["heartbeat-password"]')
+
+    curl "https://api.opsgenie.com/v2/heartbeats/${INPUT_commodore_cluster_id}" \
+      -H"Authorization: GenieKey ${OPSGENIE_KEY}" \
+      -XDELETE
+- match: And I delete the cluster from Lieutenant
+  description: |-
+    This step deletes the cluster from Lieutenant
+  inputs:
+  - name: commodore_cluster_id
+  - name: commodore_api_url
+  run: |
+    echo '###########################################################################'
+    echo '#                                                                         #'
+    echo '#  Please manually delete the cluster from Lieutenant before proceeding.  #'
+    echo '#                                                                         #'
+    echo '###########################################################################'
+    echo
+    lieutenant=vshn-lieutenant-prod
+    if [[ ${INPUT_commodore_api_url} == *int* ]]
+    then
+      lieutenant=vshn-lieutenant-int
+    fi
+    if [[ ${INPUT_commodore_api_url} == *dev* ]]
+    then
+      lieutenant=vshn-lieutenant-dev
+    fi
+    echo You can go to https://control.vshn.net/syn/lieutenantclusters/${lieutenant}/${INPUT_commodore_cluster_id}/_delete
+    sleep 2
+
+- match: And I delete the Keycloak service
+  inputs:
+  - name: commodore_cluster_id
+  description: |-
+    This step deletes the cluster's keycloak service from control.vshn.net
+  run: |
+    echo '##############################################################################'
+    echo '#                                                                            #'
+    echo "#  Please manually delete the cluster's keycloak service before proceeding.  #"
+    echo '#                                                                            #'
+    echo '##############################################################################'
+    echo
+    echo You can go to https://control.vshn.net/vshn/services/${INPUT_commodore_cluster_id}/delete
+    sleep 2
+
+- match: And I remove the cluster from openshift4-clusters
+  description: |-
+    This step removes the cluster from https://git.vshn.net/vshn/openshift4-clusters
+  inputs:
+  - name: commodore_cluster_id
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  run: |
+    if [ -e openshift4-clusters ]
+    then
+      rm -rf openshift4-clusters
+    fi
+    git clone git@git.vshn.net:vshn/openshift4-clusters.git
+    pushd openshift4-clusters
+
+    git rm -rf ${INPUT_commodore_cluster_id}
+
+    if not git diff-index --quiet HEAD
+    then
+      git checkout -b "remove-${INPUT_commodore_cluster_id}"
+      git commit -m"Remove ${INPUT_commodore_cluster_id}"
+      git push origin "remove-${INPUT_commodore_cluster_id}"
+
+      auth="PRIVATE-TOKEN: ${INPUT_gitlab_api_token}"
+
+      response=`curl -s -XPOST -H"$auth" -H"Content-Type: application/json" https://git.vshn.net/api/v4/projects/57660/merge_requests -d'{"source_branch":"'remove-${INPUT_commodore_cluster_id}'","target_branch":"main","title":"Remove cluster '${INPUT_commodore_cluster_id}'"}'`
+      echo
+      echo ">>> Please review and merge the MR at "`echo $response | jq -r .web_url`
+      echo
+    fi
+    popd

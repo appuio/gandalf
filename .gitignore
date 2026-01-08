@@ -32,3 +32,22 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+
+# Commodore
+catalog/
+compiled/
+dependencies/
+inventory/
+jsonnetfile*.json
+target/
+vendor/
+
+# Other detritus from setup runs
+.guided-setup-state.json*
+*_hieradata/
+rhcos-*.qcow2
+ssh_*
+terraform.env
+ui-log.txt
+openshift4-clusters/
