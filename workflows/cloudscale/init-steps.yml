@@ -30,6 +30,8 @@ steps:
 
     which aws >/dev/null 2>&1 && { echo "✅ aws (AWS CLI) is installed."; } || { echo "❌ aws (AWS CLI) is not installed. Please install aws to proceed. Our recommended installer is uv: 'uv tool install awscli'"; exit 1; }
 
+    which restic >/dev/null 2>&1 && { echo "✅ restic (Backup CLI) is installed."; } || { echo "❌ restic (Backup CLI) is not installed. Please install restic to proceed."; exit 1; }
+
     echo "✅ All prerequisites are met."
 - match: And I have the `openshift-install` binary for version "(?P<ocp_version>[^"]+)"
   description: |-

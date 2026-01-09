@@ -12,9 +12,11 @@ Then I confirm cluster deletion
 # And I delete all persistent volumes
 # And I delete all machinesets
 Then I save the loadbalancer metadata
+And I downtime the loadbalancers in icinga
 And I decommission Terraform resources
 Then I delete Cloudscale server groups
 And I delete all S3 buckets
+And I delete the cluster backup
 And I delete the cluster's API tokens
 And I decommission the LoadBalancers
 And I remove the cluster's DNS entries

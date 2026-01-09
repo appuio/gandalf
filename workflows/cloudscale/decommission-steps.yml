@@ -10,6 +10,7 @@ steps:
 
       Confirm this cluster ID according to the 4-eye principle. You and one colleague should agree on the cluster that is to be deleted.
   run: |
+    set -euo pipefail
     if [[ ${INPUT_commodore_cluster_id} != ${INPUT_4_eye_confirmation} ]]
     then
       echo "Cluster domain and confirmation do not match."
@@ -108,7 +109,24 @@ steps:
     env -i "lb_icinga_2=$icinga2" >> $OUTPUT
     popd
 
-
+- match: And I downtime the loadbalancers in icinga
+  description: |-
+    In this step you have to configure downtimes in Icinga for the cluster's load balancers.
+  inputs:
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  run: |
+    set -euo pipefail
+    echo '############################################################'
+    echo '#                                                          #'
+    echo '#  Please configure downtimes for both hosts in Icinga UI  #'
+    echo '#                                                          #'
+    echo '############################################################'
+    echo
+    echo The direct links are:
+    echo https://monitoring.vshn.net/icingadb/hosts?sort=host.state.severity%20desc#!/icingadb/host?name=${INPUT_lb_fqdn_1}
+    echo https://monitoring.vshn.net/icingadb/hosts?sort=host.state.severity%20desc#!/icingadb/host?name=${INPUT_lb_fqdn_2}
+    sleep 2
 - match: And I decommission Terraform resources
   description: |-
     This step decommissions all Terraform resources for the cluster.
@@ -183,6 +201,7 @@ steps:
   - name: cloudscale_token
   - name: commodore_cluster_id
   run: |
+    set -euo pipefail
     for server_group_uuid in $(curl -H"Authorization: Bearer ${INPUT_cloudscale_token}" \
       https://api.cloudscale.ch/v1/server-groups | \
       jq --arg cluster_id "${INPUT_commodore_cluster_id}" \
@@ -200,6 +219,7 @@ steps:
   - name: cloudscale_region
   - name: commodore_cluster_id
   run: |
+    set -euo pipefail
     # Use already exiting bucket user
     response=$(curl -sH "Authorization: Bearer ${INPUT_cloudscale_token}" \
       https://api.cloudscale.ch/v1/objects-users | \
@@ -220,16 +240,101 @@ steps:
     # delete Loki logstore bucket
     mc rb "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-logstore" --force
 
+- match: And I delete the cluster backup
+  description: |-
+    This step deletes the cluster's associated backup bucket from Cloudscale.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_region
+  - name: vault_address
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: backup_deletion_confirmation
+    description: |-
+      Really delete the cluster backup?
+
+      Type "YES" to delete the cluster backup. With any other value, backup deletion gets skipped.
+
+      Remember to confirm backup deletion according to the 4-eye principle: you and a colleague should agree that the backup needs to be deleted.
+  run: |
+    set -euo pipefail
+
+    if [[ ${INPUT_backup_deletion_confirmation} != "YES" ]]
+    then
+        echo '################################################################'
+        echo '#                                                              #'
+        echo '#  Skipping backup deletion because no confirmation was given  #'
+        echo '#                                                              #'
+        echo '################################################################'
+        exit 0
+    fi
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    LIEUTENANT_AUTH="Authorization: Bearer $(commodore fetch-token)"
+    REPO_URL=$(curl -sH "${LIEUTENANT_AUTH}" "https://${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id}" | jq -r .gitRepo.url)
+
+    if [ -e catalog ]
+    then
+      rm -rf catalog
+    fi
+
+    mkdir catalog
+    git archive --remote ${REPO_URL} master | tar -xC catalog
+
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+
+    # extract restic credentials from catalog and vault
+    export RESTIC_REPOSITORY=s3:$(yq -o=json 'select(.kind == "Schedule")| .spec.backend.s3 | .endpoint + "/" + .bucket' catalog/manifests/cluster-backup/10_object.yaml)
+
+    export S3_ENDPOINT=s3:$(yq -o=json 'select(.kind == "Schedule")| .spec.backend.s3 | .endpoint' catalog/manifests/cluster-backup/10_object.yaml)
+
+    PASSWORD_KEY="$(yq -o=json 'select(.kind == "Secret" and .metadata.name == "objects-backup-password") | .stringData.password' catalog/manifests/cluster-backup/10_object.yaml | cut -d: -f2)"
+    export RESTIC_PASSWORD=$(vault kv get -format json "clusters/kv/${PASSWORD_KEY%/*}" | jq -r ".data.data.${PASSWORD_KEY##*/}")
+
+    ID_KEY="$(yq -o=json 'select(.kind == "Secret" and .metadata.name == "objects-backup-s3-credentials") | .stringData.username' catalog/manifests/cluster-backup/10_object.yaml | cut -d: -f2)"
+    export AWS_ACCESS_KEY_ID=$(vault kv get -format json "clusters/kv/${ID_KEY%/*}" | jq -r ".data.data.${ID_KEY##*/}")
+
+    SECRET_KEY="$(yq -o=json 'select(.kind == "Secret" and .metadata.name == "objects-backup-s3-credentials") | .stringData.password' catalog/manifests/cluster-backup/10_object.yaml | cut -d: -f2)"
+    export AWS_SECRET_ACCESS_KEY=$(vault kv get -format json "clusters/kv/${SECRET_KEY%/*}" | jq -r ".data.data.${SECRET_KEY##*/}")
+
+    # retrieve latest restic snapshots
+    OBJECT_ID=`restic snapshots -H syn-cluster-backup --latest 1 --json | jq -r .[-1].id`
+    ETCD_ID=`restic snapshots -H syn-cluster-backup-etcd --latest 1 --json | jq -r .[-1].id`
+
+    mkdir -p backup-dump-${INPUT_commodore_cluster_id}
+
+    restic restore "$OBJECT_ID" --target backup-dump-${INPUT_commodore_cluster_id}
+    restic restore "$ETCD_ID" --target backup-dump-${INPUT_commodore_cluster_id}
+
+    # proceed with deleting the backup bucket
+    # Use already exiting bucket user
+    response=$(curl -sH "Authorization: Bearer ${INPUT_cloudscale_token}" \
+      https://api.cloudscale.ch/v1/objects-users | \
+      jq -e ".[] | select(.display_name == \"${INPUT_commodore_cluster_id}\")")
+
+    # configure minio client to use the bucket
+    mc alias set \
+      "${INPUT_commodore_cluster_id}_backup" "${S3_ENDPOINT}" \
+      $(echo $response | jq -r '.keys[0].access_key') \
+      $(echo $response | jq -r '.keys[0].secret_key')
+
+    # Delete bucket
+    mc rb "${INPUT_commodore_cluster_id}_backup/${INPUT_commodore_cluster_id}-cluster-backup" --force
+
+    # Delete object user
+    curl -i -H "Authorization: Bearer ${INPUT_cloudscale_token}" -X DELETE $(echo $response | jq -r '.href')
 
 - match: And I delete the cluster's API tokens
   description: |-
-    This step deletes the cluster's associated Cloudscale API tokens from Cloudscale
+    This step deletes the cluster's associated Cloudscale API tokens from Cloudscale.
   inputs:
   - name: cloudscale_token
   - name: cloudscale_token_floaty
   - name: cloudscale_region
   - name: commodore_cluster_id
   run: |
+    set -euo pipefail
     echo '##############################################################'
     echo '#                                                            #'
     echo '#   Please delete the Cloudscale token and Floaty token      #'
@@ -265,9 +370,10 @@ steps:
   - name: lb_icinga_1
   - name: lb_icinga_2
   run: |
+    set -euo pipefail
     echo "# Clearing encdata caches ... #"
-    ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_1}.yaml"
-    ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_2}.yaml"
+    ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_1}.yaml" || true
+    ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_2}.yaml" || true
     echo "# Cleared encdata caches. #"
     echo
     echo "# Cleaning up LBs in icinga ... #"
@@ -279,8 +385,8 @@ steps:
         icinga_host="master3.prod.monitoring.vshn.net"
       fi
       echo "  "Cleaning up LB from $icinga_host ...
-      ssh "${icinga_host}" "sudo rm -rf /var/lib/icinga2/api/zones/${INPUT_lb_fqdn_1}"
-      ssh "${icinga_host}" "sudo rm -rf /var/lib/icinga2/api/zones/${INPUT_lb_fqdn_2}"
+      ssh "${icinga_host}" "sudo rm -rf /var/lib/icinga2/api/zones/${INPUT_lb_fqdn_1}" || true
+      ssh "${icinga_host}" "sudo rm -rf /var/lib/icinga2/api/zones/${INPUT_lb_fqdn_2}" || true
       if [ "$parent_zone" != "master" ]; then
         ssh "${icinga_host}" sudo puppetctl run
       fi
@@ -316,7 +422,7 @@ steps:
     git clone git@git.vshn.net:appuio/appuio_hieradata.git
     pushd appuio_hieradata
 
-    git rm -rf lbaas/${INPUT_commodore_cluster_id}*
+    git rm -rf lbaas/${INPUT_commodore_cluster_id}* || true
 
     if not git diff-index --quiet HEAD
     then
@@ -331,11 +437,10 @@ steps:
     do
       for backup_server in "${INPUT_lb_backup_1}" "${INPUT_lb_backup_2}"
       do
-        ssh "$backup_server" "sudo rm /var/lib/burp/CA/${lb}.crt"
-        ssh "$backup_server" "sudo rm /var/lib/burp/CA/${lb}.csr"
+        ssh "$backup_server" "sudo rm /var/lib/burp/CA/${lb}.crt" || true
+        ssh "$backup_server" "sudo rm /var/lib/burp/CA/${lb}.csr" || true
         backup="/var/lib/burp/${lb}"
-        echo "$backup"
-        ssh "$backup_server" "sudo rm -rf ${backup}"
+        ssh "$backup_server" "sudo rm -rf ${backup}" || true
       done
     done
     echo "# Deleted backups from Burp server. #"
@@ -344,6 +449,7 @@ steps:
   description: |-
     In this step, you must manually remove any DNS entries associated with the cluster from https://git.vshn.net/vshn/vshn_zonefiles.
   run: |
+    set -euo pipefail
     echo '#########################################################################'
     echo '#                                                                       #'
     echo "#  Please manually delete the cluster's DNS entries before proceeding.  #"
@@ -359,21 +465,24 @@ steps:
   - name: commodore_tenant_id
   - name: commodore_api_url
   - name: vault_address
-  - name: image_major
-  - name: image_minor
+  - name: backup_deletion_confirmation
   run: |
-    echo WARNING: Using hardcoded dynamic facts!
-    echo This is only required because the setup does not yet include synthesis.
-    echo Once the setup proceeds past cluster synthesis, please update this script
-    echo to no longer use hardcoded dynamic facts.
-    echo
-    sleep 5 # to make sure user sees the warning
     export COMMODORE_API_URL="${INPUT_commodore_api_url}"
-    commodore catalog compile ${INPUT_commodore_cluster_id} \
-      --dynamic-fact kubernetesVersion.major=1 \
-      --dynamic-fact kubernetesVersion.minor="$((${INPUT_image_minor}+13))" \
-      --dynamic-fact openshiftVersion.Major=${INPUT_image_major} \
-      --dynamic-fact openshiftVersion.Minor=${INPUT_image_minor}
+
+    LIEUTENANT_AUTH="Authorization: Bearer $(commodore fetch-token)"
+    REPO_URL=$(curl -sH "${LIEUTENANT_AUTH}" "https://${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id}" | jq -r .gitRepo.url)
+
+    if [ -e catalog ]
+    then
+      rm -rf catalog
+    fi
+
+    mkdir catalog
+    git archive --remote ${REPO_URL} master | tar -xC catalog
+
+    PASSWORD_KEY="$(yq -o=json 'select(.kind == "Secret" and .metadata.name == "objects-backup-password") | .stringData.password' catalog/manifests/cluster-backup/10_object.yaml | cut -d: -f2)"
+    ID_KEY="$(yq -o=json 'select(.kind == "Secret" and .metadata.name == "objects-backup-s3-credentials") | .stringData.username' catalog/manifests/cluster-backup/10_object.yaml | cut -d: -f2)"
+    SECRET_KEY="$(yq -o=json 'select(.kind == "Secret" and .metadata.name == "objects-backup-s3-credentials") | .stringData.password' catalog/manifests/cluster-backup/10_object.yaml | cut -d: -f2)"
 
     export VAULT_ADDR=${INPUT_vault_address}
     vault login -method=oidc
@@ -382,7 +491,18 @@ steps:
         | sed -r 's#(.*)/.*#\1#' | grep -v '__shared__/__shared__' \
         | sort -u);
     do
-      vault kv delete "$secret"
+      if [[ ${INPUT_backup_deletion_confirmation} == "YES" ]]
+      then
+        vault kv delete "$secret"
+      else
+        # exclude backup credentials because the backup still exists
+        if echo "$PASSWORD_KEY $ID_KEY $SECRET_KEY" | grep "$secret" > /dev/null
+        then
+          echo "Skipping key '$secret' as it is required to access cluster backups."
+        else
+          vault kv delete "$secret"
+        fi
+      fi
     done
 
 - match: And I delete the cluster's OpsGenie heartbeat
@@ -391,6 +511,7 @@ steps:
   inputs:
   - name: vault_address
   run: |
+    set -euo pipefail
     export VAULT_ADDR=${INPUT_vault_address}
     vault login -method=oidc
     OPSGENIE_KEY=$(vault kv get -format=json \
@@ -407,6 +528,7 @@ steps:
   - name: commodore_cluster_id
   - name: commodore_api_url
   run: |
+    set -euo pipefail
     echo '###########################################################################'
     echo '#                                                                         #'
     echo '#  Please manually delete the cluster from Lieutenant before proceeding.  #'
@@ -431,6 +553,7 @@ steps:
   description: |-
     This step deletes the cluster's keycloak service from control.vshn.net
   run: |
+    set -euo pipefail
     echo '##############################################################################'
     echo '#                                                                            #'
     echo "#  Please manually delete the cluster's keycloak service before proceeding.  #"
@@ -445,9 +568,9 @@ steps:
     This step removes the cluster from https://git.vshn.net/vshn/openshift4-clusters
   inputs:
   - name: commodore_cluster_id
-  - name: gitlab_user_name
   - name: gitlab_api_token
   run: |
+    set -euo pipefail
     if [ -e openshift4-clusters ]
     then
       rm -rf openshift4-clusters
@@ -455,7 +578,7 @@ steps:
     git clone git@git.vshn.net:vshn/openshift4-clusters.git
     pushd openshift4-clusters
 
-    git rm -rf ${INPUT_commodore_cluster_id}
+    git rm -rf ${INPUT_commodore_cluster_id} || true
 
     if not git diff-index --quiet HEAD
     then
