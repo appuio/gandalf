@@ -650,6 +650,8 @@ steps:
   - name: commodore_api_url
   - name: lb_fqdn_1
   - name: lb_fqdn_2
+  outputs:
+  - name: kubeconfig_path
   run: |
     set -euo pipefail
 
@@ -730,3 +732,422 @@ steps:
       echo -n "."
       sleep 5
     done && echo "✅ API is up"
+
+    env -i "kubeconfig_path=${installer_dir}/auth/kubeconfig" >> $OUTPUT
+
+- match: And I store the subnet ID and floating IP in the Syn hierarchy
+  description: |-
+    This step retrieves the subnet ID and ingress floating IP from Terraform and stores them in the Syn hierarchy.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: control_vshn_api_token
+  - name: ignition_bootstrap
+  - name: hieradata_repo_token
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  - name: image_major
+  - name: image_minor
+  run: |
+    set -euo pipefail
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    cat <<EOF > ./terraform.env
+    CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
+    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
+    TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
+    TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
+    GIT_AUTHOR_NAME=$(git config --global user.name)
+    GIT_AUTHOR_EMAIL=$(git config --global user.email)
+    HIERADATA_REPO_TOKEN=${INPUT_hieradata_repo_token}
+    EOF
+
+    tf_image=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.image" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+    tf_tag=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.tag" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+
+    echo "Using Terraform image: ${tf_image}:${tf_tag}"
+
+    base_dir=$(pwd)
+    alias terraform='touch .terraformrc; docker run --rm -e REAL_UID=$(id -u) -e TF_CLI_CONFIG_FILE=/tf/.terraformrc --env-file ${base_dir}/terraform.env -w /tf -v $(pwd):/tf --ulimit memlock=-1 "${tf_image}:${tf_tag}" /tf/terraform.sh'
+
+    gitlab_repository_url=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id} | jq -r '.gitRepo.url' | sed 's|ssh://||; s|/|:|')
+    gitlab_repository_name=${gitlab_repository_url##*/}
+    gitlab_catalog_project_id=$(curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/projects?simple=true&search=${gitlab_repository_name/.git}" | jq -r ".[] | select(.ssh_url_to_repo == \"${gitlab_repository_url}\") | .id")
+    gitlab_state_url="https://git.vshn.net/api/v4/projects/${gitlab_catalog_project_id}/terraform/state/cluster"
+
+    pushd catalog/manifests/openshift4-terraform/
+
+    terraform init \
+      "-backend-config=address=${gitlab_state_url}" \
+      "-backend-config=lock_address=${gitlab_state_url}/lock" \
+      "-backend-config=unlock_address=${gitlab_state_url}/lock" \
+      "-backend-config=username=${INPUT_gitlab_user_name}" \
+      "-backend-config=password=${INPUT_gitlab_api_token}" \
+      "-backend-config=lock_method=POST" \
+      "-backend-config=unlock_method=DELETE" \
+      "-backend-config=retry_wait_min=5"
+
+    SUBNET_UUID="$(terraform output -raw subnet_uuid)"
+    INGRESS_FLOATING_IP="$(terraform output -raw router_vip)"
+    pushd ../../../inventory/classes/${INPUT_commodore_tenant_id}
+
+    yq eval -i '.parameters.openshift.cloudscale.subnet_uuid = "'$SUBNET_UUID'"' \
+      ${INPUT_commodore_cluster_id}.yml
+    yq eval -i '.parameters.openshift.cloudscale.ingress_floating_ip_v4 = "'$INGRESS_FLOATING_IP'"' \
+      ${INPUT_commodore_cluster_id}.yml
+
+    if not git diff-index --quiet HEAD
+    then
+      git commit -am "Configure cloudscale subnet UUID and ingress floating IP for ${INPUT_commodore_cluster_id}"
+      git push origin master
+    fi
+
+    popd
+    popd # yes, twice.
+
+    # Recompile the catalog
+    commodore catalog compile ${INPUT_commodore_cluster_id} --push \
+      --dynamic-fact kubernetesVersion.major=1 \
+      --dynamic-fact kubernetesVersion.minor="$((${INPUT_image_minor}+13))" \
+      --dynamic-fact openshiftVersion.Major=${INPUT_image_major} \
+      --dynamic-fact openshiftVersion.Minor=${INPUT_image_minor}
+
+- match: And I provision the control plane
+  description: |-
+    This step provisions the control plane nodes with Terraform.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: control_vshn_api_token
+  - name: ignition_bootstrap
+  - name: hieradata_repo_token
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  - name: kubeconfig_path
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+
+    cat <<EOF > ./terraform.env
+    CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
+    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
+    TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
+    TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
+    GIT_AUTHOR_NAME=$(git config --global user.name)
+    GIT_AUTHOR_EMAIL=$(git config --global user.email)
+    HIERADATA_REPO_TOKEN=${INPUT_hieradata_repo_token}
+    EOF
+
+    tf_image=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.image" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+    tf_tag=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.tag" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+
+    echo "Using Terraform image: ${tf_image}:${tf_tag}"
+
+    base_dir=$(pwd)
+    alias terraform='touch .terraformrc; docker run --rm -e REAL_UID=$(id -u) -e TF_CLI_CONFIG_FILE=/tf/.terraformrc --env-file ${base_dir}/terraform.env -w /tf -v $(pwd):/tf --ulimit memlock=-1 "${tf_image}:${tf_tag}" /tf/terraform.sh'
+
+    gitlab_repository_url=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id} | jq -r '.gitRepo.url' | sed 's|ssh://||; s|/|:|')
+    gitlab_repository_name=${gitlab_repository_url##*/}
+    gitlab_catalog_project_id=$(curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/projects?simple=true&search=${gitlab_repository_name/.git}" | jq -r ".[] | select(.ssh_url_to_repo == \"${gitlab_repository_url}\") | .id")
+    gitlab_state_url="https://git.vshn.net/api/v4/projects/${gitlab_catalog_project_id}/terraform/state/cluster"
+
+    pushd catalog/manifests/openshift4-terraform/
+
+    terraform init \
+      "-backend-config=address=${gitlab_state_url}" \
+      "-backend-config=lock_address=${gitlab_state_url}/lock" \
+      "-backend-config=unlock_address=${gitlab_state_url}/lock" \
+      "-backend-config=username=${INPUT_gitlab_user_name}" \
+      "-backend-config=password=${INPUT_gitlab_api_token}" \
+      "-backend-config=lock_method=POST" \
+      "-backend-config=unlock_method=DELETE" \
+      "-backend-config=retry_wait_min=5"
+
+    cat > override.tf <<EOF
+    module "cluster" {
+      bootstrap_count          = 1
+      infra_count              = 0
+      worker_count             = 0
+      additional_worker_groups = {}
+    }
+
+    echo "Patching Cilium manifests so control plane bootstrap can proceed ..."
+
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
+
+    while ! kubectl get ciliumconfig -A &>/dev/null; do
+      echo -n "."
+      sleep 2
+    done && echo -e "\nCiliumConfig CR is present"
+
+    kubectl patch -n cilium ciliumconfig cilium-enterprise --type=merge \
+    -p '{
+      "spec": {
+        "cilium": {
+          "kubeProxyReplacement": "false",
+          "nodePort": {
+            "enabled": true
+          },
+          "socketLB": {
+            "enabled": true
+          },
+          "sessionAffinity": true,
+          "externalIPs": {
+            "enabled": true
+          },
+          "hostPort": {
+            "enabled": true
+          }
+        }
+      }
+    }'
+
+    echo "Running Terraform ..."
+
+    terraform apply -auto-approve
+    dnstmp=$(mktemp)
+    terraform output -raw cluster_dns > "$dnstmp"
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    echo "@                                                                                       @"
+    echo "@  Please add the etcd DNS records shown in the Terraform output to your DNS provider.  @"
+    echo "@  Most probably in https://git.vshn.net/vshn/vshn_zonefiles                            @"
+    echo "@                                                                                       @"
+    echo "@  If terminal selection does not work the entries can also be copied from              @"
+    echo "@    $dnstmp                                                                            @"
+    echo "@                                                                                       @"
+    echo "@  Waiting for record to propagate...                                                   @"
+    echo "@                                                                                       @"
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    while ! (host "etcd-0.${INPUT_cluster_domain}")
+    do
+      sleep 15
+    done
+    rm -f "$dnstmp"
+
+    echo "Waiting for masters to become ready ..."
+    kubectl wait --for condition=ready node -l node-role.kubernetes.io/master
+    popd
+
+- match: Then I deploy initial manifests
+  description: |-
+    This step deploys some manifests required during bootstrap, including cert-manager,  machine-api-provider, machinesets, loadbalancer controller, and ingress loadbalancer.
+  inputs:
+  - name: commodore_cluster_id
+  - name: commodore_tenant_id
+  - name: commodore_api_url
+  - name: vault_address
+  - name: kubeconfig_path
+  run: |
+    set -euo pipefail
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+    installer_dir="$(pwd)/target"
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
+
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+
+    echo '# Applying cert-manager ... #'
+    kubectl apply -f catalog/manifests/cert-manager/00_namespace.yaml
+    kubectl apply -Rf catalog/manifests/cert-manager/10_cert_manager
+    kubectl -n syn-cert-manager patch --type=merge \
+      $(kubectl -n syn-cert-manager get deploy -oname) \
+      -p '{"spec":{"template":{"spec":{"tolerations":[{"operator":"Exists"}]}}}}'
+    echo '# Applied cert-manager. #'
+    echo
+    echo '# Applying machine-api-provider ... #'
+    export VAULT_TOKEN=$(vault token lookup -format=json | jq -r .data.id)
+    kapitan refs --reveal --refs-path catalog/refs -f catalog/manifests/machine-api-provider-cloudscale/00_secrets.yaml | kubectl apply -f -
+    kubectl apply  -f catalog/manifests/machine-api-provider-cloudscale/10_clusterRoleBinding.yaml
+    kubectl apply -f catalog/manifests/machine-api-provider-cloudscale/10_serviceAccount.yaml
+    kubectl apply -f catalog/manifests/machine-api-provider-cloudscale/11_deployment.yaml
+    echo '# Applied machine-api-provider. #'
+    echo
+    echo '# Applying machinesets ... #'
+    kubectl apply `for f in catalog/manifests/openshift4-nodes/machineset-*.yaml ; do echo -n "-f $f " ; done`
+    echo '# Applied machinesets. #'
+    echo
+    echo '# Applying loadbalancer controller ... #'
+    kubectl apply -f catalog/manifests/cloudscale-loadbalancer-controller/00_namespace.yaml
+    kapitan refs --reveal --refs-path catalog/refs -f catalog/manifests/cloudscale-loadbalancer-controller/10_secrets.yaml | kubectl apply -f -
+    kubectl apply -Rf catalog/manifests/cloudscale-loadbalancer-controller/10_kustomize
+    echo "Waiting for load balancer to become available ..."
+    kubectl -n appuio-cloudscale-loadbalancer-controller \
+      wait --for condition=available \
+      deploy cloudscale-loadbalancer-controller-controller-manager
+    echo '# Applied loadbalancer controller. #'
+    echo
+    echo '# Applying ingress loadbalancer ... #'
+    kubectl apply -f catalog/manifests/cloudscale-loadbalancer-controller/20_loadbalancers.yaml
+    echo '# Applied ingress loadbalancer. #'
+    echo
+
+- match: And I wait for bootstrap to complete
+  description: |-
+    This step waits for OpenShift bootstrap to complete successfully.
+  run: |
+    set -euo pipefail
+    installer_dir="$(pwd)/target"
+    openshift-install --dir "${installer_dir}" \
+      wait-for bootstrap-complete --log-level debug
+
+- match: Then I remove the bootstrap node
+  description: |-
+    After successful bootstrapping, this step removes the bootstrap node again.
+  inputs:
+  - name: cloudscale_token
+  - name: cloudscale_token_floaty
+  - name: control_vshn_api_token
+  - name: ignition_bootstrap
+  - name: hieradata_repo_token
+  - name: gitlab_user_name
+  - name: gitlab_api_token
+  - name: commodore_cluster_id
+  - name: commodore_api_url
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  run: |
+    set -euo pipefail
+
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+    installer_dir="$(pwd)/target"
+
+    cat <<EOF > ./terraform.env
+    CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
+    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
+    TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
+    TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
+    GIT_AUTHOR_NAME=$(git config --global user.name)
+    GIT_AUTHOR_EMAIL=$(git config --global user.email)
+    HIERADATA_REPO_TOKEN=${INPUT_hieradata_repo_token}
+    EOF
+
+    tf_image=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.image" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+    tf_tag=$(\
+      yq eval ".parameters.openshift4_terraform.images.terraform.tag" \
+      dependencies/openshift4-terraform/class/defaults.yml)
+
+    echo "Using Terraform image: ${tf_image}:${tf_tag}"
+
+    base_dir=$(pwd)
+    alias terraform='touch .terraformrc; docker run --rm -e REAL_UID=$(id -u) -e TF_CLI_CONFIG_FILE=/tf/.terraformrc --env-file ${base_dir}/terraform.env -w /tf -v $(pwd):/tf --ulimit memlock=-1 "${tf_image}:${tf_tag}" /tf/terraform.sh'
+
+    gitlab_repository_url=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id} | jq -r '.gitRepo.url' | sed 's|ssh://||; s|/|:|')
+    gitlab_repository_name=${gitlab_repository_url##*/}
+    gitlab_catalog_project_id=$(curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/projects?simple=true&search=${gitlab_repository_name/.git}" | jq -r ".[] | select(.ssh_url_to_repo == \"${gitlab_repository_url}\") | .id")
+    gitlab_state_url="https://git.vshn.net/api/v4/projects/${gitlab_catalog_project_id}/terraform/state/cluster"
+
+    pushd catalog/manifests/openshift4-terraform/
+
+    terraform init \
+      "-backend-config=address=${gitlab_state_url}" \
+      "-backend-config=lock_address=${gitlab_state_url}/lock" \
+      "-backend-config=unlock_address=${gitlab_state_url}/lock" \
+      "-backend-config=username=${INPUT_gitlab_user_name}" \
+      "-backend-config=password=${INPUT_gitlab_api_token}" \
+      "-backend-config=lock_method=POST" \
+      "-backend-config=unlock_method=DELETE" \
+      "-backend-config=retry_wait_min=5"
+
+    rm override.tf
+    terraform apply --auto-approve
+
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    echo "@                                                                                       @"
+    echo "@  Please review and merge the LB hieradata MR listed in Terraform output hieradata_mr. @"
+    echo "@                                                                                       @"
+    echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+    while (GITLAB_HOST=git.vshn.net GITLAB_TOKEN="${INPUT_gitlab_api_token}" glab mr list -R=appuio/appuio_hieradata | grep "${INPUT_commodore_cluster_id}")
+    do
+      sleep 10
+    done
+    echo PR merged, waiting for CI to finish...
+    sleep 10
+    while (GITLAB_HOST=git.vshn.net GITLAB_TOKEN="${INPUT_gitlab_api_token}" glab mr list -R=appuio/appuio_hieradata | grep "running")
+    do
+      sleep 10
+    done
+
+    ssh "${INPUT_lb_fqdn_1}" sudo puppetctl run
+    ssh "${INPUT_lb_fqdn_2}" sudo puppetctl run
+
+    popd
+
+- match: And I configure initial deployments
+  description: |-
+    This step configures some deployments that require manual changes after cluster bootstrap, such as reverting the Cilium patch from earlier, enabling proxy protocol on the Ingress controller, and scheduling the ingress controller on the infrastructure nodes.
+  inputs:
+  - name: commodore_cluster_id
+  - name: commodore_api_url
+  - name: kubeconfig_path
+  run: |
+    set -euo pipefail
+    export COMMODORE_API_URL="${INPUT_commodore_api_url}"
+    installer_dir="$(pwd)/target"
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
+
+    echo '# Patching cilium ... #'
+    kubectl patch network.operator cluster --type=merge \
+      -p '{"spec":{"deployKubeProxy":false}}'
+    kubectl -n cilium replace -f catalog/manifests/cilium/olm/cluster-network-07-cilium-ciliumconfig.yaml
+    while ! kubectl -n cilium get cm cilium-config -oyaml | grep 'kube-proxy-replacement: "true"' &>/dev/null; do
+      echo -n "."
+      sleep 2
+    done && echo -e "\nCilium config updated"
+    kubectl -n cilium rollout restart ds/cilium
+    echo '# Patched cilium. #'
+    echo
+    echo '# Enabling proxy protocol ... #'
+    kubectl -n openshift-ingress-operator patch ingresscontroller default --type=json \
+      -p '[{
+        "op":"replace",
+        "path":"/spec/endpointPublishingStrategy",
+        "value": {"type": "HostNetwork", "hostNetwork": {"protocol": "PROXY"}}
+      }]'
+    echo '# Enabled proxy protocol. #'
+    echo
+
+    distribution=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id} | jq -r .facts.distribution)
+    if [[ distribution != "oke" ]]
+    then
+      echo '# Scheduling ingress controller on infra nodes ... #'
+      kubectl -n openshift-ingress-operator patch ingresscontroller default --type=json \
+        -p '[{
+          "op":"replace",
+          "path":"/spec/nodePlacement",
+          "value":{"nodeSelector":{"matchLabels":{"node-role.kubernetes.io/infra":""}}}
+        }]'
+      echo '# Scheduled ingress controller on infra nodes. #'
+      echo
+    fi
+
+    echo '# Removing temporary cert-manager tolerations ... #'
+    kubectl -n syn-cert-manager patch --type=json \
+      $(kubectl -n syn-cert-manager get deploy -oname) \
+      -p '[{"op":"remove","path":"/spec/template/spec/tolerations"}]'
+    echo '# Removed temporary cert-manager tolerations. #'
+
+- match: And I wait for installation to complete
+  description: |-
+    This step waits for OpenShift installation to complete successfully.
+  run: |
+    set -euo pipefail
+    installer_dir="$(pwd)/target"
+    openshift-install --dir "${installer_dir}" \
+      wait-for install-complete --log-level debug
