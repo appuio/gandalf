@@ -74,7 +74,9 @@ steps:
   - name: kubeconfig_path
   run: |
     set -euo pipefail
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
     kubectl -n openshift-machine-api delete machinesets --all
+    echo '#  Waiting for machines to be deleted ...'
     kubectl -n openshift-machine-api wait --for=delete \
         machinesets,machines --all --timeout=120s
     kubectl get nodes
@@ -312,13 +314,15 @@ steps:
   - name: vault_address
   - name: commodore_cluster_id
   - name: commodore_tenant_id
+  - name: commodore_api_url
   - name: backup_deletion_confirmation
     description: |-
       Really delete the cluster backup?
 
       Type "YES" to delete the cluster backup. With any other value, backup deletion gets skipped.
 
-      Remember to confirm backup deletion according to the 4-eye principle: you and a colleague should agree that the backup needs to be deleted.
+      Remember to confirm backup deletion according to the 4-eye principle:
+      you and a colleague should agree that the backup needs to be deleted.
   run: |
     set -euo pipefail
 
@@ -334,7 +338,7 @@ steps:
     export COMMODORE_API_URL="${INPUT_commodore_api_url}"
 
     LIEUTENANT_AUTH="Authorization: Bearer $(commodore fetch-token)"
-    REPO_URL=$(curl -sH "${LIEUTENANT_AUTH}" "https://${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id}" | jq -r .gitRepo.url)
+    REPO_URL=$(curl -sH "${LIEUTENANT_AUTH}" "${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id}" | jq -r .gitRepo.url)
 
     if [ -e catalog ]
     then
@@ -546,10 +550,11 @@ steps:
   - name: vault_address
   - name: backup_deletion_confirmation
   run: |
+    set -euo pipefail
     export COMMODORE_API_URL="${INPUT_commodore_api_url}"
 
     LIEUTENANT_AUTH="Authorization: Bearer $(commodore fetch-token)"
-    REPO_URL=$(curl -sH "${LIEUTENANT_AUTH}" "https://${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id}" | jq -r .gitRepo.url)
+    REPO_URL=$(curl -sH "${LIEUTENANT_AUTH}" "${INPUT_commodore_api_url}/clusters/${INPUT_commodore_cluster_id}" | jq -r .gitRepo.url)
 
     if [ -e catalog ]
     then
@@ -575,7 +580,7 @@ steps:
         vault kv delete "$secret"
       else
         # exclude backup credentials because the backup still exists
-        if echo "$PASSWORD_KEY $ID_KEY $SECRET_KEY" | grep "$secret" > /dev/null
+        if echo "$PASSWORD_KEY $ID_KEY $SECRET_KEY" | grep "${secret##clusters/kv/}" > /dev/null
         then
           echo "Skipping key '$secret' as it is required to access cluster backups."
         else
@@ -589,6 +594,7 @@ steps:
     This step deletes the cluster's OpsGenie heartbeat.
   inputs:
   - name: vault_address
+  - name: commodore_cluster_id
   run: |
     set -euo pipefail
     export VAULT_ADDR=${INPUT_vault_address}
