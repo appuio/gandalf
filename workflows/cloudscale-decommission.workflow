@@ -3,10 +3,10 @@ And a lieutenant cluster
 And Cloudscale API tokens
 And a personal VSHN GitLab access token
 And a control.vshn.net Servers API token
-# And I have emergency cluster access
+And I have emergency cluster access
 Then I confirm cluster deletion
-# Then I disable the OpsGenie heartbeat
-# And I disable Project Syn
+Then I disable the OpsGenie heartbeat
+And I disable Project Syn
 And I delete all Load Balancer services and Load Balancers
 And I disable machine autoscaling
 And I delete all persistent volumes
@@ -18,6 +18,7 @@ Then I delete Cloudscale server groups
 And I delete all S3 buckets
 And I delete the cluster backup
 And I delete the cluster's API tokens
+And I remove the LoadBalancers from control.vshn.net
 And I decommission the LoadBalancers
 And I remove the cluster's DNS entries
 Then I delete the cluster's Vault secrets

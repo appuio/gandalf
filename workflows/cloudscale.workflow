@@ -1,6 +1,7 @@
 Given I have all prerequisites installed
 And I have the `openshift-install` binary for version "4.19"
 And a lieutenant cluster
+And a Keycloak service
 And Cloudscale API tokens
 And a personal VSHN GitLab access token
 And a control.vshn.net Servers API token
@@ -22,11 +23,14 @@ And I wait for bootstrap to complete
 Then I remove the bootstrap node
 And I configure initial deployments
 And I wait for installation to complete
-# Then I synthesize the cluster
-# Then I set acme-dns CNAME records
-# And I verify emergency access
-# And I enable Opsgenie alerting
-# And I verify the image registry config
-# And I configure apt-dater groups for the LoadBalancers
-# Then I verify the UpgradeConfig
-# And I add the cluster to openshift4-clusters
+Then I synthesize the cluster
+Then I set acme-dns CNAME records
+And I verify emergency access
+And I configure the cluster alerts
+And I enable Opsgenie alerting
+And I verify the image registry config
+Then I configure apt-dater groups for the LoadBalancers
+And I remove the bootstrap bucket
+And I schedule the first maintenance
+And I add the cluster to openshift4-clusters
+And I wait for maintenance to complete

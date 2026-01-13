@@ -32,6 +32,8 @@ steps:
 
     which restic >/dev/null 2>&1 && { echo "✅ restic (Backup CLI) is installed."; } || { echo "❌ restic (Backup CLI) is not installed. Please install restic to proceed."; exit 1; }
 
+    which emergency-credentials-receive >/dev/null 2>&1 && { echo "✅ emergency-credentials-receive (Cluster emergency access helper) is installed."; } || { echo "❌ emergency-credentials-receive is not installed. Please install it from https://github.com/vshn/emergency-credentials-receive ."; exit 1; }
+
     echo "✅ All prerequisites are met."
 - match: And I have the `openshift-install` binary for version "(?P<ocp_version>[^"]+)"
   description: |-
@@ -103,6 +105,25 @@ steps:
     export region=$(curl -sH "Authorization: Bearer $(commodore fetch-token)" ${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id} | jq -r .facts.region)
     test -z "$region" && test "$region" != "null" && { echo "❌ Failed to retrieve cloudscale region for cluster ID '$INPUT_commodore_cluster_id'."; exit 1; } || { echo "✅ Retrieved cloudscale region '$region' for cluster ID '$INPUT_commodore_cluster_id'."; }
     env -i "cloudscale_region=$region" >> $OUTPUT
+- match: And a Keycloak service
+  description: |-
+    In this step, you have to create a Keycloak service for the new cluster
+    via the VSHN Control Web UI at https://control.vshn.net/vshn/services/_create 
+  inputs:
+  - name: commodore_cluster_id
+  run: |
+    echo '#########################################################'
+    echo '#                                                       #'
+    echo '#  Please create a Keycloak service with the cluster's  #'
+    echo '#  ID as Service Name via the VSHN Control Web UI.      #'
+    echo '#                                                       #'
+    echo '#########################################################'
+    echo
+    echo "The name and ID of the service should be ${INPUT_commodore_cluster_id}."
+    echo "You can go to https://control.vshn.net/vshn/services/_create"
+    sleep 2
+
+
 - match: And Cloudscale API tokens
   inputs:
   - name: cloudscale_token
@@ -119,23 +140,44 @@ steps:
     Create 2 new cloudscale API tokens with read+write permissions and name them
     <cluster_id> and <cluster_id>_floaty on control.cloudscale.ch/service/<your-project>/api-token.
 
-    This step currently does not validate the tokens, but ensures they are provided.
+    This step currently does not validate whether the tokens have read permission.
+  run: |
+    set -euo pipefail
+    if [[ `curl -sH "Authorization: Bearer ${INPUT_cloudscale_token}" https://api.cloudscale.ch/v1/flavors -o /dev/null -w"%{http_code}"` != 200 ]]
+    then
+      echo "Cloudscale token not valid!"
+    fi
+    if [[ `curl -sH "Authorization: Bearer ${INPUT_cloudscale_token_floaty}" https://api.cloudscale.ch/v1/flavors -o /dev/null -w"%{http_code}"` != 200 ]]
+    then
+      echo "Cloudscale Floaty token not valid!"
+    fi
 - match: And a personal VSHN GitLab access token
   description: |-
     This step ensures that you have provided a personal access token for VSHN GitLab.
 
     Create the token at https://git.vshn.net/-/user_settings/personal_access_tokens with the "api" scope.
 
-    This step currently does not validate the token, but ensures it is provided.
+    This step currently does not validate the token's scope.
   inputs:
   - name: gitlab_api_token
     description: |-
       Personal access token for VSHN GitLab with the "api" scope.
 
       Create the token at https://git.vshn.net/-/user_settings/personal_access_tokens with the "api" scope.
+  outputs:
   - name: gitlab_user_name
     description: |-
       Your GitLab user name.
+  run: |
+    set -euo pipefail
+    user="${ curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/user" | jq -r .username }"
+    if [[ "$user" == "null" ]]
+    then
+      echo "Error validating GitLab token. Are you sure it is valid?"
+      exit 1
+    fi
+    env -i "gitlab_user_name=$user" >> $OUTPUT
+    echo "Token is valid."
 - match: And a control.vshn.net Servers API token
   description: |-
     This step ensures that you have provided an API token for control.vshn.net Servers API.
@@ -151,6 +193,19 @@ steps:
       Used to create the puppet based LBs.
 
       Be extra careful with the IP allowlist.
+  run: |
+    set -euo pipefail
+
+    AUTH="X-AccessToken: ${INPUT_control_vshn_api_token}"
+
+    code="$( curl -H"$AUTH" https://control.vshn.net/api/servers/1/appuio/ -o /dev/null -w"%{http_code}" )"
+
+    if [[ "$code" != 200 ]]
+    then
+      echo "ERROR: could not access Server API (Status $code)"
+      echo "Please ensure your token is valid"
+      exit 1
+    fi
 - match: And basic cluster information
   description: |-
     This step collects two essential pieces of information required for cluster setup: the base domain and the Red Hat pull secret.

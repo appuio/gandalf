@@ -1,4 +1,24 @@
 steps:
+- match: And I have emergency cluster access
+  description: |-
+    This step ensures the emergency credentials for the cluster have been retrieved
+  inputs:
+  - name: cluster_domain
+    description: |-
+      Domain of the cluster - the part after `api` or `apps`, respectively.
+
+      Usually of the form `<CLUSTER_ID>.<BASE_DOMAIN>`
+  - name: commodore_cluster_id
+  outputs:
+  - name: kubeconfig_path
+  run: |
+    export EMR_KUBERNETES_ENDPOINT=https://api.${INPUT_cluster_domain}:6443
+    emergency-credentials-receive "${INPUT_commodore_cluster_id}"
+
+    export KUBECONFIG="em-${INPUT_commodore_cluster_id}"
+    kubectl get nodes
+
+    env -i "kubeconfig_path=${pwd}/em-${INPUT_commodore_cluster_id}" >> $OUTPUT
 - match: Then I confirm cluster deletion
   description: |-
     This step asks you to confirm with 4 eyes whether this cluster is really to be deleted.
@@ -16,10 +36,44 @@ steps:
       echo "Cluster domain and confirmation do not match."
       exit 1
     fi
+- match: Then I disable the OpsGenie heartbeat
+  description: |-
+    This step disables the OpsGenie heartbeat, so we avoid producing alerts
+    during decommissioning.
+  inputs:
+  - name: vault_address
+  - name: commodore_cluster_id
+  run: |
+    set -euo pipefail
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+    OPSGENIE_KEY=$(vault kv get -format=json \
+      clusters/kv/__shared__/__shared__/opsgenie/aldebaran | \
+      jq -r '.data.data["heartbeat-password"]')
+    curl "https://api.opsgenie.com/v2/heartbeats/${CLUSTER_ID}" \
+      -H"Authorization: GenieKey ${OPSGENIE_KEY}" \
+      -H"Content-Type: application/json" \
+      -XPATCH --data '{"enabled":false}'
+- match: And I disable Project Syn
+  description: |-
+    This step disables Project Syn (ArgoCD), so that ArgoCD does not re-create
+    resources we are trying to decommission.
+  inputs:
+  - name: kubeconfig_path
+  run: |
+    set -euo pipefail
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
+    kubectl -n syn patch apps --type=json \
+        -p '[{"op":"replace", "path":"/spec/syncPolicy", "value": {}}]' \
+        root argocd
+    kubectl -n syn-argocd-operator scale deployment \
+        syn-argocd-operator-controller-manager --replicas 0
+    kubectl -n syn scale sts syn-argocd-application-controller --replicas 0
 - match: And I delete all Load Balancer services and Load Balancers
   description: |-
     This step deletes all services of type LoadBalancer from the cluster.
-    It then deletes all LoadBalancer instances as well, so that the corresponding Cloudscale resources can be decommissioned by the controller.
+    It then deletes all LoadBalancer instances as well, so that the
+    corresponding Cloudscale resources can be decommissioned by the controller.
   inputs:
   - name: kubeconfig_path
   run: |
@@ -182,11 +236,12 @@ steps:
   - name: lb_fqdn_2
   run: |
     set -euo pipefail
-    echo '############################################################'
-    echo '#                                                          #'
-    echo '#  Please configure downtimes for both hosts in Icinga UI  #'
-    echo '#                                                          #'
-    echo '############################################################'
+    echo '##############################################################'
+    echo '#                                                            #'
+    echo '#  Please configure downtimes for both hosts in Icinga UI.   #'
+    echo '#  Don't forget to also enable downtime for "All Services".  #'
+    echo '#                                                            #'
+    echo '##############################################################'
     echo
     echo The direct links are:
     echo https://monitoring.vshn.net/icingadb/hosts?sort=host.state.severity%20desc#!/icingadb/host?name=${INPUT_lb_fqdn_1}
@@ -430,6 +485,27 @@ steps:
     done
     echo " Success."
 
+- match: And I remove the LoadBalancers from control.vshn.net
+  description: |-
+    In this step you need to remove the LoadBalancer servers from control.vshn.net
+  inputs:
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  run: |
+    set -euo pipefail
+    echo '###################################################################################'
+    echo '#                                                                                 #'
+    echo "#  Please manually delete the cluster's LoadBalancer servers before proceeding.   #"
+    echo '#                                                                                 #'
+    echo '###################################################################################'
+    echo
+    echo You can go to:
+    echo https://control.vshn.net/servers/definitions/appuio/${INPUT_lb_fqdn_1}/delete
+    echo https://control.vshn.net/servers/definitions/appuio/${INPUT_lb_fqdn_2}/delete
+    sleep 2
+    # NOTE(aa): This step is currently annoying to automate, but once ticket PORTAL-253 is resolved,
+    # it should be easy.
+
 - match: And I decommission the LoadBalancers
   description: |-
     This step decommissions resources associated with the Puppet managed LoadBalancers.
@@ -444,14 +520,6 @@ steps:
   - name: lb_icinga_2
   run: |
     set -euo pipefail
-    echo "# Removing servers from control.vshn.net ... #"
-    AUTH="X-AccessToken: ${INPUT_control_vshn_api_token}"
-
-    curl -sH"$AUTH" https://control.vshn.net/api/servers/1/appuio/${INPUT_lb_fqdn_1} -XDELETE
-    curl -sH"$AUTH" https://control.vshn.net/api/servers/1/appuio/${INPUT_lb_fqdn_2} -XDELETE
-
-    echo "# Removed servers from control.vshn.net. #"
-    echo
     echo "# Clearing encdata caches ... #"
     ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_1}.yaml" || true
     ssh nfs1.ch1.puppet.vshn.net "sudo rm /srv/nfs/export/puppetserver-puppetserver-enc-cache-pvc-*/${INPUT_lb_fqdn_2}.yaml" || true

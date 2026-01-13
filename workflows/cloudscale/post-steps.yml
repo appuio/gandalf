@@ -1,0 +1,194 @@
+steps:
+- match: Then I configure apt-dater groups for the LoadBalancers
+  description: |-
+    This step configures the apt-dater groups for the LoadBalancers via puppet.
+  inputs:
+  - name: lb_fqdn_1
+  - name: lb_fqdn_2
+  - name: commodore_cluster_id
+  run: |
+    set -euo pipefail
+
+    if [ -e nodes_hieradata ]
+    then
+      rm -rf nodes_hieradata
+    fi
+    git clone git@git.vshn.net:vshn-puppet/nodes_hieradata.git
+    pushd nodes_hieradata
+
+    if ! grep "s_apt_dater::host::group" "${INPUT_lb_fqdn_1}"
+    then
+      cat >"${INPUT_lb_fqdn_1}.yaml" <<EOF
+      ---
+      s_apt_dater::host::group: '2200_20_night_main'
+      EOF
+    fi
+
+    if ! grep "s_apt_dater::host::group" "${INPUT_lb_fqdn_2}"
+    then
+      cat >"${INPUT_lb_fqdn_2}.yaml" <<EOF
+      ---
+      s_apt_dater::host::group: '2200_40_night_second'
+      EOF
+    fi
+
+    git add *.yaml
+
+    if not git diff-index --quiet HEAD
+    then
+      git commit -m"Configure apt-dater groups for LBs for OCP4 cluster ${INPUT_commodore_cluster_id}"
+      git push origin master
+
+      echo Waiting for CI to finish...
+      sleep 10
+      while (GITLAB_HOST=git.vshn.net GITLAB_TOKEN="${INPUT_gitlab_api_token}" glab ci list -R=vshn-puppet/nodes_hieradata | grep "running")
+      do
+        sleep 10
+      done
+
+      echo Running puppet ...
+      for fqdn in "${INPUT_lb_fqdn_1}" "${INPUT_lb_fqdn_2}"
+      do
+        ssh "${fqdn}" sudo puppetctl run
+      done
+    fi
+    popd
+
+- match: And I remove the bootstrap bucket
+  description: |-
+    This step deletes the S3 bucket with the bootstrap ignition config.
+  inputs:
+  - name: commodore_cluster_id
+  run: |
+    set -euo pipefail
+
+    export VAULT_ADDR=${INPUT_vault_address}
+    vault login -method=oidc
+
+    mc rm -r --force "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition"
+    mc rb "${INPUT_commodore_cluster_id}/${INPUT_commodore_cluster_id}-bootstrap-ignition"
+- match: And I schedule the first maintenance
+  description: |-
+    This step verifies that the UpgradeConfig object is present on the cluster,
+    and schedules a first maintenance.
+  inputs:
+  - name: kubeconfig_path
+  run: |
+    set -euo pipefail
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
+
+    numconfs="$( kubectl -n appuio-openshift-upgrade-controller get upgradeconfig -oyaml | yq '.items | length' )"
+
+    if (( $numconfs < 1 ))
+    then
+      kubectl -n appuio-openshift-upgrade-controller get upgradeconfig
+      echo
+      echo ERROR: did not find an upgradeconfig
+      echo Please review the output above and ensure an upgradeconfig is present.
+      echo
+      echo Double check the cluster's maintenance_window fact.
+      exit 1
+    fi
+
+    echo '# Scheduling a first maintenance ... '
+
+    uc=$(yq .parameters.facts.maintenance_window inventory/classes/params/cluster.yml)
+    kubectl -n appuio-openshift-upgrade-controller get upgradeconfig $uc -oyaml | \
+      yq '
+        .metadata.name = "first",
+        .metadata.labels = {},
+        .spec.jobTemplate.metadata.labels.upgradeconfig/name = "first",
+        .spec.schedule.cron = ((now+"1m")|format_datetime("4 15")) + " * * *",
+        .spec.pinVersionWindow = "0m"
+      ' | \
+      kubectl create -f - --as=system:admin
+
+- match: And I add the cluster to openshift4-clusters
+  description: |-
+    This step adds the cluster to https://git.vshn.net/vshn/openshift4-clusters
+  inputs:
+  - name: commodore_cluster_id
+  - name: kubeconfig_path
+  - name: jumphost_fqdn
+    description: |-
+      FQDN of the jumphost used to connect to this cluster, if any.
+
+      If no jumphost is used, enter "NONE".
+  - name: socks5_port
+    description: |-
+      SOCKS5 port number to use for this cluster, of the form 120XX.
+      If the cluster shares a proxy jumphost with another cluster, use the same port.
+      If the cluster uses a brand new jumphost, choose a new unique port.
+
+      If the cluster does not use a proxy jumphost, enter "NONE".
+  run: |
+    set -euo pipefail
+    if [ -e openshift4-clusters ]
+    then
+      rm -rf openshift4-clusters
+    fi
+    git clone git@git.vshn.net:vshn/openshift4-clusters.git
+    pushd openshift4-clusters
+
+    API_URL=$(yq e '.clusters[0].cluster.server' "${INPUT_kubeconfig_path}")
+
+    git clone git@git.vshn.net:vshn/openshift4-clusters.git
+    pushd openshift4-clusters
+
+    mkdir -p "${INPUT_commodore_cluster_id}"
+    pushd "${INPUT_commodore_cluster_id}"
+    ln -s ../base_envrc .envrc
+    cat >.connection_facts <<EOF
+    API=${API_URL}
+    EOF
+    popd
+
+    port="${echo "${INPUT_socks5_port}" | tr '[:upper:]' '[:lower:]'
+    jumphost="${echo "${INPUT_jumphost_fqdn}" | tr '[:upper:]' '[:lower:]'
+
+    if [[ "$port" != "none" ]] && [[ "$jumphost" != "none" ]]
+    then
+      cat >> "${INPUT_commodore_cluster_id}/.connection_facts <<EOF
+      JUMPHOST=${INPUT_jumphost_fqdn}
+      SOCKS5_PORT=${INPUT_socks5_port}
+      EOF
+      python foxyproxy_generate.py
+    fi
+
+    if not git diff-index --quiet HEAD
+    then
+      git commit -am "Add cluster ${INPUT_commodore_cluster_id}"
+    fi
+    popd
+    
+    echo
+    echo '#########################################################'
+    echo '#                                                       #'
+    echo '#  Please test the cluster connection, and if it works  #'
+    echo '#  as expected, push the commit to the repository.      #'
+    echo '#                                                       #'
+    echo '#########################################################'
+    echo
+    echo "Run the following:"
+    echo "cd `pwd`/openshift4-clusters/${INPUT_commodore_cluster_id}"
+    echo "direnv allow"
+    echo "oc whoami"
+    echo "git push origin master   # only if everything is OK"
+    sleep 2
+- match: And I wait for maintenance to complete
+  description: |-
+    This step waits for the first maintenance to complete, and then removes the
+    initial UpgradeConfig.
+  inputs:
+  - name: kubeconfig_path
+  run: |
+    set -euo pipefail
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
+
+    echo "#  Waiting for initial maintenance to complete ..."
+    kubectl wait --for=condition=Succeeded upgradejob -l "upgradeconfig/name=first"
+
+    echo "#  Deleting initial UpgradeConfig ..."
+    kubectl --as=system:admin -n appuio-openshift-upgrade-controller \
+      delete upgradeconfig first
+
