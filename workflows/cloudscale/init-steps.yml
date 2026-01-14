@@ -170,7 +170,7 @@ steps:
       Your GitLab user name.
   run: |
     set -euo pipefail
-    user="${ curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/user" | jq -r .username }"
+    user="$( curl -sH "Authorization: Bearer ${INPUT_gitlab_api_token}" "https://git.vshn.net/api/v4/user" | jq -r .username )"
     if [[ "$user" == "null" ]]
     then
       echo "Error validating GitLab token. Are you sure it is valid?"
@@ -183,8 +183,6 @@ steps:
     This step ensures that you have provided an API token for control.vshn.net Servers API.
 
     Create the token at https://control.vshn.net/tokens/_create/servers and ensure your IP is allowlisted.
-
-    This step currently does not validate the token, but ensures it is provided.
   inputs:
   - name: control_vshn_api_token
     description: |-
@@ -203,7 +201,7 @@ steps:
     if [[ "$code" != 200 ]]
     then
       echo "ERROR: could not access Server API (Status $code)"
-      echo "Please ensure your token is valid"
+      echo "Please ensure your token is valid and your IP is on the allowlist."
       exit 1
     fi
 - match: And basic cluster information
@@ -668,10 +666,11 @@ steps:
 
     echo "Loadbalancer FQDNs: $lb1 , $lb2"
 
+    echo "Waiting for HAproxy ..."
     while true; do
       curl --connect-timeout 1 "http://api.${INPUT_cluster_domain}:6443" &>/dev/null || exit_code=$?
       if [ $exit_code -eq 52 ]; then
-        echo HAproxy up
+        echo "  HAproxy up!"
         break
       else
         echo -n "."
@@ -683,6 +682,7 @@ steps:
     ssh management2.corp.vshn.net "sshop --output-archive /dev/stdout" | tar -C ~ -xzf -
     echo done
 
+    echo "waiting for ssh access ..."
     ssh "${lb1}" hostname -f
     ssh "${lb2}" hostname -f
 
@@ -864,7 +864,7 @@ steps:
     then
       git commit -am "Configure cloudscale subnet UUID and ingress floating IP for ${INPUT_commodore_cluster_id}"
       git push origin master
-    fi
+    fi || true
 
     popd
     popd # yes, twice.
@@ -1038,9 +1038,6 @@ steps:
     kubectl apply -f catalog/manifests/machine-api-provider-cloudscale/11_deployment.yaml
     echo '# Applied machine-api-provider. #'
     echo
-    # TODO(aa): In my test I was getting some nodes with no ProviderID set.
-    # I'm wondering if that's because machinesets were applied too soon - the CCM hadn't had a chance to come online in time.
-    # I had to spend some time manually recreating nodes and/or adding ProviderIDs to them.
     echo '# Applying machinesets ... #'
     kubectl apply `for f in catalog/manifests/openshift4-nodes/machineset-*.yaml ; do echo -n "-f $f " ; done`
     echo '# Applied machinesets. #'

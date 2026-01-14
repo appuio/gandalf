@@ -51,3 +51,4 @@ ssh_*
 terraform.env
 ui-log.txt
 openshift4-clusters/
+em-*

@@ -560,7 +560,7 @@ steps:
     then
       git commit -m"Decommission LBs for ${INPUT_commodore_cluster_id}"
       git push origin master
-    fi
+    fi || true
 
     popd
     echo "# Removed LBs from nodes hieradata. #"
@@ -579,7 +579,7 @@ steps:
     then
       git commit -m"Decommission ${INPUT_commodore_cluster_id}"
       git push origin master
-    fi
+    fi || true
     popd
     echo "# Removed cluster from Appuio hieradata. #"
     echo
@@ -745,5 +745,5 @@ steps:
       echo
       echo ">>> Please review and merge the MR at "`echo $response | jq -r .web_url`
       echo
-    fi
+    fi || true
     popd

@@ -13,32 +13,35 @@ steps:
     export KUBECONFIG="${INPUT_kubeconfig_path}"
     LIEUTENANT_AUTH="Authorization:Bearer $(commodore fetch-token)"
 
-    INSTALL_URL=$(curl -H "${LIEUTENANT_AUTH}" "${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id}" | jq -r ".installURL")
-
-    if [[ $INSTALL_URL == "null" ]]
-    # TODO(aa): consider doing this programmatically - especially if, at a later point, we add the lieutenant kubeconfig to the inputs anyway
+    if not kubectl get deploy -nsyn steward > /dev/null
     then
-        echo '###################################################################################'
-        echo '#                                                                                 #'
-        echo '#  Could not fetch install URL! Please reset the bootstrap token and try again.   #'
-        echo '#                                                                                 #'
-        echo '###################################################################################'
-        echo
-        echo 'See https://kb.vshn.ch/corp-tech/projectsyn/explanation/bootstrap-token.html#_resetting_the_bootstrap_token'
-        exit 1
+      INSTALL_URL=$(curl -H "${LIEUTENANT_AUTH}" "${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id}" | jq -r ".installURL")
+
+      if [[ $INSTALL_URL == "null" ]]
+      # TODO(aa): consider doing this programmatically - especially if, at a later point, we add the lieutenant kubeconfig to the inputs anyway
+      then
+          echo '###################################################################################'
+          echo '#                                                                                 #'
+          echo '#  Could not fetch install URL! Please reset the bootstrap token and try again.   #'
+          echo '#                                                                                 #'
+          echo '###################################################################################'
+          echo
+          echo 'See https://kb.vshn.ch/corp-tech/projectsyn/explanation/bootstrap-token.html#_resetting_the_bootstrap_token'
+          exit 1
+      fi
+
+      echo "# Deploying steward ..."
+      kubectl create -f "$INSTALL_URL"
     fi
 
-    echo "# Deploying steward ..."
-    kubectl create -f "$INSTALL_URL"
-
     echo "# Waiting for ArgoCD resource to exist ..."
-    kubectl wait --for=create crds/argocds.argoproj.io
+    kubectl wait --for=create crds/argocds.argoproj.io --timeout=90s
 
     echo "# Waiting for ArgoCD instance to exist ..."
-    kubectl wait --for=create argocd/syn-argocd -nsyn
+    kubectl wait --for=create argocd/syn-argocd -nsyn --timeout=90s
 
     echo "# Waiting for ArgoCD instance to be ready ..."
-    kubectl wait --for=jsonpath='{.status.phase}'=Available argocd/syn-argocd -nsyn
+    kubectl wait --for=jsonpath='{.status.phase}'=Available argocd/syn-argocd -nsyn --timeout=5m
 
     echo "Done."
 
@@ -66,12 +69,12 @@ steps:
 
     dnstmp=$(mktemp)
 
-    echo "_acme-challenge.api   IN CNAME $fulldomain." > dnstmp
-    echo "_acme-challenge.apps  IN CNAME $fulldomain." >> dnstmp
+    echo "_acme-challenge.api   IN CNAME $fulldomain." > $dnstmp
+    echo "_acme-challenge.apps  IN CNAME $fulldomain." >> $dnstmp
 
     echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
     echo "@                                                                                       @"
-    echo "@  Please add the acme DNS records above to your DNS provider.                          @"
+    echo "@  Please add the acme DNS records below to your DNS provider.                          @"
     echo "@  Most probably in https://git.vshn.net/vshn/vshn_zonefiles                            @"
     echo "@                                                                                       @"
     echo "@  If terminal selection does not work the entries can also be copied from              @"
@@ -86,12 +89,18 @@ steps:
     echo "The following entry must be created in the same origin as the apps record:"
     echo "_acme-challenge.apps  IN CNAME $fulldomain."
     echo
-    echo "Waiting for DNS records to propagate ..."
-    while ! (host "_acme-challenge.api.${INPUT_cluster_domain}")
+
+    # back up kubeconfig, just in case
+    cp "${INPUT_kubeconfig_path}" "${INPUT_kubeconfig_path}2"
+
+    yq -i e 'del(.clusters[0].cluster.certificate-authority-data)' "${INPUT_kubeconfig_path}"
+
+    echo "Waiting for cluster certificate to be issued ..."
+    until kubectl get nodes
     do
-      sleep 15
+      sleep 5
     done
-    rm -f "$dnstmp"
+
 
 - match: And I verify emergency access
   description: |-
@@ -100,6 +109,11 @@ steps:
   - name: kubeconfig_path
   - name: cluster_domain
   - name: commodore_cluster_id
+  - name: passbolt_passphrase
+    description: |-
+      Your password for Passbolt.
+
+      This is required to access the encrypted emergency credentials.
   outputs:
   - name: kubeconfig_path
   run: |
@@ -118,6 +132,7 @@ steps:
     done
 
     export EMR_KUBERNETES_ENDPOINT=https://api.${INPUT_cluster_domain}:6443
+    export EMR_PASSPHRASE="${INPUT_passbolt_passphrase}"
     emergency-credentials-receive "${INPUT_commodore_cluster_id}"
 
     yq -i e '.clusters[0].cluster.insecure-skip-tls-verify = true' "em-${INPUT_commodore_cluster_id}"
@@ -125,11 +140,10 @@ steps:
     kubectl get nodes
     oc whoami | grep system:serviceaccount:appuio-emergency-credentials-controller: || exit 1
 
-    env -i "kubeconfig_path=${pwd}/em-${INPUT_commodore_cluster_id}" >> $OUTPUT
+    env -i "kubeconfig_path=$(pwd)/em-${INPUT_commodore_cluster_id}" >> $OUTPUT
 
     echo "#  Invalidating 10-year admin kubeconfig ..."
-    echo TOOD actually do it
-    echo kubectl -n openshift-config patch cm admin-kubeconfig-client-ca --type=merge -p '{"data": {"ca-bundle.crt": ""}}'
+    kubectl -n openshift-config patch cm admin-kubeconfig-client-ca --type=merge -p '{"data": {"ca-bundle.crt": ""}}'
 
 - match: And I configure the cluster alerts
   description: |-
