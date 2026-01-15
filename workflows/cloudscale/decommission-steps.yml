@@ -360,7 +360,7 @@ steps:
     set -euo pipefail
     for server_group_uuid in $(curl -H"Authorization: Bearer ${INPUT_cloudscale_token}" \
       https://api.cloudscale.ch/v1/server-groups | \
-      jq --arg cluster_id "${INPUT_commodore_cluster_id}" \
+      jq -r --arg cluster_id "${INPUT_commodore_cluster_id}" \
       '.[]|select(.name|startswith($cluster_id))|.uuid'); do
       curl -H"Authorization: Bearer ${INPUT_cloudscale_token}" \
         "https://api.cloudscale.ch/v1/server-groups/${server_group_uuid}" \
@@ -467,8 +467,14 @@ steps:
 
     mkdir -p backup-dump-${INPUT_commodore_cluster_id}
 
-    restic restore "$OBJECT_ID" --target backup-dump-${INPUT_commodore_cluster_id}
-    restic restore "$ETCD_ID" --target backup-dump-${INPUT_commodore_cluster_id}
+    if [[ "$OBJECT_ID" != "null" ]]
+    then
+      restic restore "$OBJECT_ID" --target backup-dump-${INPUT_commodore_cluster_id}
+    fi
+    if [[ "$ETCD_ID" != "null" ]]
+    then
+      restic restore "$ETCD_ID" --target backup-dump-${INPUT_commodore_cluster_id}
+    fi
 
     # proceed with deleting the backup bucket
     # Use already exiting bucket user
