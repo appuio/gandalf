@@ -993,7 +993,8 @@ steps:
     export KUBECONFIG="${INPUT_kubeconfig_path}"
 
     echo "Waiting for masters to become ready ..."
-    kubectl wait --for condition=ready node -l node-role.kubernetes.io/master
+    kubectl wait --for create --timeout=600s node -l node-role.kubernetes.io/master
+    kubectl wait --for condition=ready --timeout=600s node -l node-role.kubernetes.io/master
     popd
 
 - match: Then I deploy initial manifests
