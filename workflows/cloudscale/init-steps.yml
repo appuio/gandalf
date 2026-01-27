@@ -343,9 +343,10 @@ steps:
 
     yq eval -i '.parameters.networkpolicy.networkPlugin = "cilium"' ${INPUT_commodore_cluster_id}.yml
 
-    yq eval -i '.parameters.openshift4_monitoring.upstreamRules.networkPlugin = "cilium"' ${INPUT_commodore_cluster_id}.yml
     yq eval -i '.parameters.openshift.infraID = "TO_BE_DEFINED"' ${INPUT_commodore_cluster_id}.yml
     yq eval -i '.parameters.openshift.clusterID = "TO_BE_DEFINED"' ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i '.parameters.cilium.olm.generate_olm_deployment = true' ${INPUT_commodore_cluster_id}.yml
 
     git diff --exit-code --quiet || git commit -a -m "Add Cilium addon to ${INPUT_commodore_cluster_id}"
 
@@ -512,6 +513,9 @@ steps:
       ${INPUT_commodore_cluster_id}.yml
 
     yq eval -i ".parameters.openshift.clusterID = \"$(jq -r .clusterID "${installer_dir}/metadata.json")\"" \
+      ${INPUT_commodore_cluster_id}.yml
+
+    yq eval -i 'del(.parameters.cilium.olm.generate_olm_deployment)' \
       ${INPUT_commodore_cluster_id}.yml
 
     yq eval -i ".parameters.openshift.ssh_key = \"$(cat ${INPUT_ssh_public_key_path})\"" \
