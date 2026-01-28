@@ -1020,6 +1020,7 @@ steps:
     kubectl apply -Rf catalog/manifests/cert-manager/10_cert_manager
     # shellcheck disable=2046
     # we need word splitting here
+    kubectl -n syn-cert-manager patch --type=merge \
       $(kubectl -n syn-cert-manager get deploy -oname) \
       -p '{"spec":{"template":{"spec":{"tolerations":[{"operator":"Exists"}]}}}}'
     echo '# Applied cert-manager. #'
@@ -1028,7 +1029,7 @@ steps:
     VAULT_TOKEN=$(vault token lookup -format=json | jq -r .data.id)
     export VAULT_TOKEN
     kapitan refs --reveal --refs-path catalog/refs -f catalog/manifests/machine-api-provider-cloudscale/00_secrets.yaml | kubectl apply -f -
-    kubectl apply  -f catalog/manifests/machine-api-provider-cloudscale/10_clusterRoleBinding.yaml
+    kubectl apply -f catalog/manifests/machine-api-provider-cloudscale/10_clusterRoleBinding.yaml
     kubectl apply -f catalog/manifests/machine-api-provider-cloudscale/10_serviceAccount.yaml
     kubectl apply -f catalog/manifests/machine-api-provider-cloudscale/11_deployment.yaml
     echo '# Applied machine-api-provider. #'
@@ -1036,7 +1037,9 @@ steps:
     echo '# Applying machinesets ... #'
     # shellcheck disable=2046
     # we need word splitting here
-    kubectl apply $( for f in catalog/manifests/openshift4-nodes/machineset-*.yaml ; do echo -n "-f $f " ; done )
+    for f in catalog/manifests/openshift4-nodes/machineset-*.yaml;
+      do kubectl apply -f "$f";
+    done
     # We do not want to quote the $() expression because we *want* it to be word-split.
     echo '# Applied machinesets. #'
     echo

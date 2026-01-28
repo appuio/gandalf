@@ -13,8 +13,7 @@ steps:
     export KUBECONFIG="${INPUT_kubeconfig_path}"
     LIEUTENANT_AUTH="Authorization:Bearer $(commodore fetch-token)"
 
-    if not kubectl get deploy -nsyn steward > /dev/null
-    then
+    if ! kubectl get deploy -n syn steward > /dev/null; then
       INSTALL_URL=$(curl -H "${LIEUTENANT_AUTH}" "${COMMODORE_API_URL}/clusters/${INPUT_commodore_cluster_id}" | jq -r ".installURL")
 
       if [[ $INSTALL_URL == "null" ]]
