@@ -455,7 +455,30 @@ steps:
       "${installer_dir}/manifests/cloudscale_ccm_01_secret.yaml"
 
     echo Copying Cilium OLM manifests...
-    cp catalog/manifests/cilium/olm/* "${installer_dir}/manifests/"
+    for f in catalog/manifests/cilium/olm/[a-z]*; do
+      cp "$f" "${installer_dir}/manifests/cilium_$(basename "$f")"
+    done
+
+    # shellcheck disable=2016
+    # We don't want the shell to execute network.operator.openshift.io as a
+    # command, so we need single quotes here.
+    echo 'Generating initial `network.operator.openshift.io` resource...'
+    yq '{
+    "apiVersion": "operator.openshift.io/v1",
+    "kind": "Network",
+    "metadata": {
+      "name": "cluster"
+    },
+    "spec": {
+      "deployKubeProxy": false,
+      "clusterNetwork": .spec.clusterNetwork,
+      "externalIP": {
+        "policy": {}
+      },
+      "networkType": "Cilium",
+      "serviceNetwork": .spec.serviceNetwork
+    }}' "${installer_dir}/manifests/cluster-network-02-config.yml" \
+    > "${installer_dir}/manifests/cilium_cluster-network-operator.yaml"
 
     gen_cluster_domain=$(yq e '.spec.baseDomain' \
       "${installer_dir}/manifests/cluster-dns-02-config.yml")
@@ -945,37 +968,6 @@ steps:
     }
     EOF
 
-    echo "Patching Cilium manifests so control plane bootstrap can proceed ..."
-
-    export KUBECONFIG="${INPUT_kubeconfig_path}"
-
-    while ! kubectl get ciliumconfig -A &>/dev/null; do
-      echo -n "."
-      sleep 2
-    done && echo -e "\nCiliumConfig CR is present"
-
-    kubectl patch -n cilium ciliumconfig cilium-enterprise --type=merge \
-    -p '{
-      "spec": {
-        "cilium": {
-          "kubeProxyReplacement": "false",
-          "nodePort": {
-            "enabled": true
-          },
-          "socketLB": {
-            "enabled": true
-          },
-          "sessionAffinity": true,
-          "externalIPs": {
-            "enabled": true
-          },
-          "hostPort": {
-            "enabled": true
-          }
-        }
-      }
-    }'
-
     echo "Running Terraform ..."
 
     terraform apply -auto-approve
@@ -998,8 +990,11 @@ steps:
     done
     rm -f "$dnstmp"
 
+    export KUBECONFIG="${INPUT_kubeconfig_path}"
+
     echo "Waiting for masters to become ready ..."
-    kubectl wait --for condition=ready node -l node-role.kubernetes.io/master
+    kubectl wait --for create --timeout=600s node -l node-role.kubernetes.io/master
+    kubectl wait --for condition=ready --timeout=600s node -l node-role.kubernetes.io/master
     popd
 
 - match: Then I deploy initial manifests
@@ -1172,17 +1167,6 @@ steps:
     export COMMODORE_API_URL="${INPUT_commodore_api_url}"
     export KUBECONFIG="${INPUT_kubeconfig_path}"
 
-    echo '# Patching cilium ... #'
-    kubectl patch network.operator cluster --type=merge \
-      -p '{"spec":{"deployKubeProxy":false}}'
-    kubectl -n cilium replace -f catalog/manifests/cilium/olm/cluster-network-07-cilium-ciliumconfig.yaml
-    while ! kubectl -n cilium get cm cilium-config -oyaml | grep 'kube-proxy-replacement: "true"' &>/dev/null; do
-      echo -n "."
-      sleep 2
-    done && echo -e "\nCilium config updated"
-    kubectl -n cilium rollout restart ds/cilium
-    echo '# Patched cilium. #'
-    echo
     echo '# Enabling proxy protocol ... #'
     kubectl -n openshift-ingress-operator patch ingresscontroller default --type=json \
       -p '[{
