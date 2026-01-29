@@ -182,7 +182,6 @@ steps:
   - name: cloudscale_token
   - name: cloudscale_token_floaty
   - name: control_vshn_api_token
-  - name: ignition_bootstrap
   - name: hieradata_repo_token
   - name: gitlab_user_name
   - name: gitlab_api_token
@@ -202,7 +201,6 @@ steps:
 
     cat <<EOF > ./terraform.env
     CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
-    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
     TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
     TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
     GIT_AUTHOR_NAME=$(git config --global user.name)
@@ -292,7 +290,6 @@ steps:
   - name: cloudscale_token
   - name: cloudscale_token_floaty
   - name: control_vshn_api_token
-  - name: ignition_bootstrap
   - name: hieradata_repo_token
   - name: gitlab_user_name
   - name: gitlab_api_token
@@ -305,7 +302,6 @@ steps:
 
     cat <<EOF > ./terraform.env
     CLOUDSCALE_API_TOKEN=${INPUT_cloudscale_token}
-    TF_VAR_ignition_bootstrap=${INPUT_ignition_bootstrap}
     TF_VAR_lb_cloudscale_api_secret=${INPUT_cloudscale_token_floaty}
     TF_VAR_control_vshn_net_token=${INPUT_control_vshn_api_token}
     GIT_AUTHOR_NAME=$(git config --global user.name)
@@ -684,9 +680,10 @@ steps:
     export VAULT_ADDR=${INPUT_vault_address}
     vault login -method=oidc
 
-    for secret in $(find catalog/refs/ -type f -printf "clusters/kv/%P\n" \
-        | sed -r 's#(.*)/.*#\1#' | grep -v '__shared__/__shared__' \
-        | sort -u);
+    for secret in $(find catalog/refs/ -type f \
+      | sed -r -e 's#catalog/refs#clusters/kv#' -e 's#(.*)/.*#\1#' \
+      | grep -v '__shared__/__shared__' \
+      | sort -u);
     do
       if [[ ${INPUT_backup_deletion_confirmation} == "YES" ]]
       then
