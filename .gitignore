@@ -11,6 +11,10 @@
 guided-setup
 gandalf
 
+# Goreleaser
+dist/
+.github/release-notes.md
+
 # Test binary, built with `go test -c`
 *.test
 
