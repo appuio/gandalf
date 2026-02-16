@@ -9,9 +9,9 @@ import (
 )
 
 var RootCmd = &cobra.Command{
-	Use:   "guided-setup",
-	Short: "Guided Setup allows building interactive setup workflows.",
-	Long:  "Guided Setup allows building interactive setup workflows.",
+	Use:   "gandalf",
+	Short: "Gandalf allows building interactive setup workflows.",
+	Long:  "Gandalf allows building interactive setup workflows.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		cmd.SilenceUsage = true
 	},

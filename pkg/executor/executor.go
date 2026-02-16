@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/appuio/guided-setup/pkg/state"
-	"github.com/appuio/guided-setup/pkg/steps"
-	"github.com/appuio/guided-setup/pkg/workflow"
+	"github.com/appuio/gandalf/pkg/state"
+	"github.com/appuio/gandalf/pkg/steps"
+	"github.com/appuio/gandalf/pkg/workflow"
 	"go.uber.org/multierr"
 )
 

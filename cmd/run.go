@@ -6,11 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/appuio/guided-setup/pkg/executor"
-	"github.com/appuio/guided-setup/pkg/state"
-	"github.com/appuio/guided-setup/pkg/steps"
-	"github.com/appuio/guided-setup/pkg/workflow"
-	"github.com/appuio/guided-setup/ui"
+	"github.com/appuio/gandalf/pkg/executor"
+	"github.com/appuio/gandalf/pkg/state"
+	"github.com/appuio/gandalf/pkg/steps"
+	"github.com/appuio/gandalf/pkg/workflow"
+	"github.com/appuio/gandalf/ui"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -28,21 +28,21 @@ func NewRunCommand() *cobra.Command {
 	ro := &runOptions{}
 	c := &cobra.Command{
 		Use:       "run WORKFLOW steps...",
-		Example:   "guided-setup run workflow.workflow path/to/steps/*.yml",
+		Example:   "gandalf run workflow.workflow path/to/steps/*.yml",
 		Short:     "Runs the specified workflow.",
 		Long:      strings.Join([]string{}, " "),
 		ValidArgs: []string{"path", "paths..."},
 		Args:      cobra.MinimumNArgs(2),
 		RunE:      ro.Run,
 	}
-	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", "~/.guided-setup/rc", "Path to a shell rc file to source before executing any step scripts.")
+	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", "~/.gandalf/rc", "Path to a shell rc file to source before executing any step scripts.")
 	return c
 }
 
 func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	_ = cmd.Context()
 
-	stateManager, err := state.NewStateManager(".guided-setup-state.json")
+	stateManager, err := state.NewStateManager(".gandalf-state.json")
 	if err != nil {
 		return fmt.Errorf("failed to create state manager: %w", err)
 	}

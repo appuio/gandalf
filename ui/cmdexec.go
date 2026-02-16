@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"github.com/appuio/guided-setup/pkg/executor"
+	"github.com/appuio/gandalf/pkg/executor"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

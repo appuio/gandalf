@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/appuio/guided-setup/cmd"
+	"github.com/appuio/gandalf/cmd"
 )
 
 func main() {
