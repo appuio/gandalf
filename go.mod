@@ -1,4 +1,4 @@
-module github.com/appuio/guided-setup
+module github.com/appuio/gandalf
 
 go 1.25.3
 

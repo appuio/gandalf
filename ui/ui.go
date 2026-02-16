@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/appuio/guided-setup/pkg/executor"
-	"github.com/appuio/guided-setup/pkg/log"
+	"github.com/appuio/gandalf/pkg/executor"
+	"github.com/appuio/gandalf/pkg/log"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"

@@ -9,6 +9,7 @@
 *.dylib
 
 guided-setup
+gandalf
 
 # Test binary, built with `go test -c`
 *.test
@@ -45,6 +46,7 @@ vendor/
 
 # Other detritus from setup runs
 .guided-setup-state.json*
+.gandalf-state.json*
 *_hieradata/
 rhcos-*.qcow2
 ssh_*

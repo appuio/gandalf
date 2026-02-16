@@ -8,10 +8,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/appuio/guided-setup/pkg/executor"
-	"github.com/appuio/guided-setup/pkg/renderer"
-	"github.com/appuio/guided-setup/pkg/steps"
-	"github.com/appuio/guided-setup/pkg/workflow"
+	"github.com/appuio/gandalf/pkg/executor"
+	"github.com/appuio/gandalf/pkg/renderer"
+	"github.com/appuio/gandalf/pkg/steps"
+	"github.com/appuio/gandalf/pkg/workflow"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -33,7 +33,7 @@ func NewRenderCommand() *cobra.Command {
 	ro := &renderOptions{}
 	c := &cobra.Command{
 		Use:     "render WORKFLOW steps...",
-		Example: "guided-setup render workflow.workflow path/to/steps/*.yml",
+		Example: "gandalf render workflow.workflow path/to/steps/*.yml",
 		Short:   "Renders the specified workflow.",
 		Long: strings.Join([]string{
 			"The render command renders the specified workflow in the specified format.",

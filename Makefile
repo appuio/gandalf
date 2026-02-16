@@ -10,7 +10,7 @@ MAKEFLAGS += --no-builtin-variables
 
 export GOEXPERIMENT = jsonv2
 
-BIN_FILENAME := guided-setup
+BIN_FILENAME := gandalf
 
 .PHONY: help
 help: ## Show this help
