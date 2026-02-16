@@ -22,6 +22,8 @@ func init() {
 type runOptions struct {
 	// ShellRCFile is an optional path to a shell rc file to source before executing any step scripts.
 	ShellRCFile string
+	StateFile   string
+	UILogFile   string
 }
 
 func NewRunCommand() *cobra.Command {
@@ -36,13 +38,15 @@ func NewRunCommand() *cobra.Command {
 		RunE:      ro.Run,
 	}
 	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", "~/.gandalf/rc", "Path to a shell rc file to source before executing any step scripts.")
+	c.Flags().StringVar(&ro.StateFile, "statefile", ".gandalf-state.json", "Path to a JSON file to store workflow state. Will be created if it does not exist.")
+	c.Flags().StringVar(&ro.UILogFile, "uilogfile", "ui-log.txt", "Path to a file where all script output displayed in the UI is logged.")
 	return c
 }
 
 func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	_ = cmd.Context()
 
-	stateManager, err := state.NewStateManager(".gandalf-state.json")
+	stateManager, err := state.NewStateManager(ro.StateFile)
 	if err != nil {
 		return fmt.Errorf("failed to create state manager: %w", err)
 	}
@@ -91,7 +95,7 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to prepare executor: %w", err)
 	}
 
-	ui, err := ui.NewUI(executor)
+	ui, err := ui.NewUI(executor, ro.UILogFile)
 	if err != nil {
 		return fmt.Errorf("failed to create UI: %w", err)
 	}

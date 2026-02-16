@@ -8,9 +8,11 @@ MAKEFLAGS += --no-builtin-variables
 .SECONDARY:
 .DEFAULT_GOAL := help
 
-export GOEXPERIMENT = jsonv2
 
-BIN_FILENAME := gandalf
+# General variables
+include Makefile.vars.mk
+
+export GOEXPERIMENT = jsonv2
 
 .PHONY: help
 help: ## Show this help
@@ -22,7 +24,14 @@ test: ## Run tests
 	cat cover.tmp.out | grep -v "zz_generated.deepcopy.go" > cover.out
 
 .PHONY: build
-build: fmt vet $(BIN_FILENAME) ## Build binary
+build: build-bin build-docker ## All-in-one build
+
+.PHONY: build-bin
+build-bin: fmt vet $(BIN_FILENAME) ## Build binary
+
+.PHONY: build-docker
+build-docker: build-bin ## Build docker image
+	$(DOCKER_CMD) build -t $(CONTAINER_IMG) .
 
 .PHONY: generate
 generate: ## Generate manifests e.g. CRD, RBAC etc.
