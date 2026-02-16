@@ -543,8 +543,8 @@ func max(a, b int) int {
 	return b
 }
 
-func NewUI(exc *executor.Executor) (*tea.Program, error) {
-	l, err := log.NewLogger("ui-log.txt")
+func NewUI(exc *executor.Executor, logfile string) (*tea.Program, error) {
+	l, err := log.NewLogger(logfile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create UI logger: %w", err)
 	}
