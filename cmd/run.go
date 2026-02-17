@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/appuio/gandalf/pkg/executor"
@@ -63,22 +64,28 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	}
 
 	collectedSteps := []steps.Step{}
-	for _, stepFile := range args[1:] {
-		rawStep, err := os.ReadFile(stepFile)
+	for _, stepFilePath := range args[1:] {
+		matches, err := filepath.Glob(stepFilePath)
 		if err != nil {
-			return fmt.Errorf("failed to read step file %s: %w", stepFile, err)
+			return fmt.Errorf("failed to find step file %s: %w", stepFilePath, err)
 		}
+		for _, stepFile := range matches {
+			rawStep, err := os.ReadFile(stepFile)
+			if err != nil {
+				return fmt.Errorf("failed to read step file %s: %w", stepFile, err)
+			}
 
-		jsonBytes, err := yaml.YAMLToJSON(rawStep)
-		if err != nil {
-			return fmt.Errorf("failed to convert step file %s from YAML to JSON: %w", stepFile, err)
-		}
+			jsonBytes, err := yaml.YAMLToJSON(rawStep)
+			if err != nil {
+				return fmt.Errorf("failed to convert step file %s from YAML to JSON: %w", stepFile, err)
+			}
 
-		parsedFile := &steps.StepsFile{}
-		if err := json.Unmarshal(jsonBytes, parsedFile); err != nil {
-			return fmt.Errorf("failed to unmarshal step file %s: %w", stepFile, err)
+			parsedFile := &steps.StepsFile{}
+			if err := json.Unmarshal(jsonBytes, parsedFile); err != nil {
+				return fmt.Errorf("failed to unmarshal step file %s: %w", stepFile, err)
+			}
+			collectedSteps = append(collectedSteps, parsedFile.Steps...)
 		}
-		collectedSteps = append(collectedSteps, parsedFile.Steps...)
 	}
 
 	executor := &executor.Executor{
