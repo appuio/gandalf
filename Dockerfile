@@ -6,9 +6,8 @@ RUN \
     bash \
     coreutils
 
-COPY docker-entrypoint.sh /usr/bin/
 COPY gandalf /usr/bin/
 
-ENTRYPOINT ["bash", "/usr/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["gandalf"]
 
 USER 65536:0
