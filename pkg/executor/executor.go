@@ -193,7 +193,10 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 		script = fmt.Sprintf("test -r %s && source %s\n%s", e.ShellRCFile, e.ShellRCFile, script)
 	}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	// NOTE(aa): Switched to bash instead of sh, since virtually all of our scripts set -o pipefail, which is a bashism.
+	// `sh` defaults to bash on many Linux distros, but not on Debian, which is what we use in the container.
+	// Better to make this explicit.
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Env = os.Environ()
 	outputs := e.StateManager.Outputs()
 	for _, input := range matchedStep.MatchedStep.Inputs {

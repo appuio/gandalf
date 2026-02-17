@@ -1,7 +1,8 @@
-FROM docker.io/library/alpine:3.23 as runtime
+FROM docker.io/library/debian:12 as runtime
 
 RUN \
-  apk add --update --no-cache \
+  apt update && \
+  apt install \
     bash \
     coreutils
 
