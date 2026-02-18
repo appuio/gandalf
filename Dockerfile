@@ -1,4 +1,4 @@
-FROM docker.io/library/debian:12 as runtime
+FROM docker.io/library/debian:12 AS runtime
 
 RUN \
   apt update && \
