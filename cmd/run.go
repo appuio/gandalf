@@ -47,12 +47,6 @@ func NewRunCommand() *cobra.Command {
 func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	_ = cmd.Context()
 
-	stateManager, err := state.NewStateManager(ro.StateFile)
-	if err != nil {
-		return fmt.Errorf("failed to create state manager: %w", err)
-	}
-	defer stateManager.Close()
-
 	rawWF, err := os.ReadFile(args[0])
 	if err != nil {
 		return fmt.Errorf("failed to read workflow file: %w", err)
@@ -87,22 +81,28 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 			collectedSteps = append(collectedSteps, parsedFile.Steps...)
 		}
 	}
+	matcher := executor.Matcher{
+		Workflow: wf,
+		Steps:    collectedSteps,
+	}
+
+	stateManager, err := state.NewStateManager(ro.StateFile, &matcher)
+	if err != nil {
+		return fmt.Errorf("failed to create state manager: %w", err)
+	}
+	defer stateManager.Close()
 
 	executor := &executor.Executor{
-		Matcher: executor.Matcher{
-			Workflow: wf,
-			Steps:    collectedSteps,
-		},
 		StateManager: stateManager,
-
-		ShellRCFile: ro.ShellRCFile,
+		Matcher:      &matcher,
+		ShellRCFile:  ro.ShellRCFile,
 	}
 
 	if err := executor.Prepare(); err != nil {
 		return fmt.Errorf("failed to prepare executor: %w", err)
 	}
 
-	ui, err := ui.NewUI(executor, ro.UILogFile)
+	ui, err := ui.NewUI(executor, &matcher, ro.UILogFile)
 	if err != nil {
 		return fmt.Errorf("failed to create UI: %w", err)
 	}

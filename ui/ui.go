@@ -39,6 +39,11 @@ var (
 
 type uiState string
 
+type VariableMetadata interface {
+	IsLocal(string) bool
+	IsSensitive(string) bool
+}
+
 const (
 	uiStateInitializing  uiState = ""
 	uiStateStep          uiState = "step"
@@ -77,6 +82,8 @@ type model struct {
 	program *tea.Program
 
 	logger *log.Logger
+
+	varMeta VariableMetadata
 }
 
 func (m model) Init() tea.Cmd {
@@ -402,7 +409,15 @@ func (m model) stepView() string {
 				}
 			case varMappingTypeInput:
 				if val, ok := stateOutputs[input.name]; ok {
-					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Magenta).Render(val.Value)
+					color := lipgloss.Magenta
+					text := val.Value
+					if m.varMeta.IsLocal(input.name) {
+						color = lipgloss.Yellow
+					}
+					if m.varMeta.IsSensitive(input.name) {
+						text = "*** YOU SHALL NOT PEEK ***"
+					}
+					inputView += " " + lipgloss.NewStyle().Foreground(color).Render(text)
 				}
 			}
 			if es := m.renderEditSelectorNumber(input); es != "" {
@@ -543,7 +558,7 @@ func max(a, b int) int {
 	return b
 }
 
-func NewUI(exc *executor.Executor, logfile string) (*tea.Program, error) {
+func NewUI(exc *executor.Executor, varMeta VariableMetadata, logfile string) (*tea.Program, error) {
 	l, err := log.NewLogger(logfile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create UI logger: %w", err)
@@ -551,6 +566,7 @@ func NewUI(exc *executor.Executor, logfile string) (*tea.Program, error) {
 	m := &model{
 		logger:          l,
 		executor:        exc,
+		varMeta:         varMeta,
 		overlayVarInput: newVarInputModel(),
 	}
 	m.spinner = spinner.New()
