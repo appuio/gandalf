@@ -59,6 +59,8 @@ const (
 	cmdStateFinished cmdState = "finished"
 )
 
+const sensitiveValueMask = "*** YOU SHALL NOT PEEK ***"
+
 type model struct {
 	uiState uiState
 
@@ -415,7 +417,7 @@ func (m model) stepView() string {
 						color = lipgloss.Yellow
 					}
 					if m.varMeta.IsSensitive(input.name) {
-						text = "*** YOU SHALL NOT PEEK ***"
+						text = sensitiveValueMask
 					}
 					inputView += " " + lipgloss.NewStyle().Foreground(color).Render(text)
 				}
@@ -434,7 +436,11 @@ func (m model) stepView() string {
 			editNumber++
 			outputs += ("\n- " + output.name)
 			if val, ok := stateOutputs[output.name]; ok {
-				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(val.Value)
+				text := val.Value
+				if m.varMeta.IsSensitive(output.name) {
+					text = sensitiveValueMask
+				}
+				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(text)
 			}
 			if es := m.renderEditSelectorNumber(output); es != "" {
 				outputs += " " + es
