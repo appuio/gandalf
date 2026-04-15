@@ -264,7 +264,7 @@ func (m model) runCmd() (model, tea.Cmd) {
 	}
 
 	return m, func() tea.Msg {
-		return cmdFinished{err: ce.Run()}
+		return cmdFinished{err: ce.Run(m.cmdOutputViewport.Width, m.cmdOutputViewport.Height)}
 	}
 }
 

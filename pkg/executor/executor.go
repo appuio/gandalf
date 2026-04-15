@@ -13,6 +13,7 @@ import (
 	"github.com/appuio/gandalf/pkg/state"
 	"github.com/appuio/gandalf/pkg/steps"
 	"github.com/appuio/gandalf/pkg/workflow"
+	"github.com/creack/pty"
 	"go.uber.org/multierr"
 )
 
@@ -196,7 +197,7 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 	// NOTE(aa): Switched to bash instead of sh, since virtually all of our scripts set -o pipefail, which is a bashism.
 	// `sh` defaults to bash on many Linux distros, but not on Debian, which is what we use in the container.
 	// Better to make this explicit.
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd := exec.CommandContext(ctx, "bash")
 	cmd.Env = os.Environ()
 	outputs := e.StateManager.Outputs()
 	for _, input := range matchedStep.MatchedStep.Inputs {
@@ -215,27 +216,49 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 		return nil, fmt.Errorf("failed to get absolute path of outputs file: %w", err)
 	}
 	cmd.Env = append(cmd.Env, fmt.Sprintf("OUTPUT=%s", outputFile))
+
+	script = script + "\n"
 	return &Cmd{
 		Cmd:            cmd,
 		OutputFile:     outputFile,
 		outputCallback: e.StateManager.SetOutput,
+		script:         script,
 	}, nil
 }
 
 type Cmd struct {
 	Cmd            *exec.Cmd
 	OutputFile     string
+	script         string
 	outputCallback func(key, value string) error
+	Pty            *os.File
 }
 
-func (c *Cmd) Start() error {
-	return c.Cmd.Start()
+func (c *Cmd) Start(ttyW, ttyH int) error {
+
+	fmt.Printf("%d x %d \n", ttyW, ttyH)
+
+	ws := pty.Winsize{
+		Rows: uint16(ttyH),
+		Cols: uint16(ttyW),
+	}
+	f, err := pty.StartWithSize(c.Cmd, &ws)
+	if err != nil {
+		return err
+	}
+	c.Pty = f
+
+	_, err = f.Write([]byte(c.script))
+
+	return err
 }
 
 func (c *Cmd) Wait() error {
 	if err := c.Cmd.Wait(); err != nil {
 		return fmt.Errorf("failed to wait for command: %w", err)
 	}
+
+	defer c.Pty.Close()
 
 	raw, err := os.ReadFile(c.OutputFile)
 	if err != nil {
