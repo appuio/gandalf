@@ -120,7 +120,7 @@ func (e *Executor) Prepare() error {
 	for _, step := range e.Steps {
 		for _, input := range step.Inputs {
 			if os.Getenv("INPUT_"+input.Name) != "" {
-				err := e.StateManager.SetOutput(input.Name, os.Getenv("INPUT_"+input.Name))
+				err := e.StateManager.SetOutputFromEnv(input.Name, os.Getenv("INPUT_"+input.Name))
 				if err != nil {
 					return fmt.Errorf("failed to set initial input %q: %w", input.Name, err)
 				}
