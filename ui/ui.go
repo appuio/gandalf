@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"text/template"
 
 	"github.com/appuio/gandalf/pkg/executor"
 	"github.com/appuio/gandalf/pkg/log"
@@ -290,7 +292,7 @@ func (m model) openInputOverlay(varName string) (model, tea.Cmd) {
 	if err == nil {
 		for _, input := range step.MatchedStep.Inputs {
 			if input.Name == varName {
-				description = input.Description
+				description = m.renderDescription(input.Description)
 				break
 			}
 		}
@@ -362,13 +364,30 @@ func (m model) renderEditSelectorNumber(mp varMapping) string {
 	return base.Render("[") + selected.Render(highlighted) + base.Render(rest) + base.Render("]")
 }
 
+func (m model) renderDescription(rawDesc string) string {
+	desc := rawDesc
+	t, err := template.New("step_desc").Parse(rawDesc)
+	if err == nil {
+		var buf bytes.Buffer
+		err = t.Execute(&buf, m.executor.StateManager.Outputs())
+		if err == nil {
+			desc = buf.String()
+		}
+	}
+	if err != nil {
+		errormsg := fmt.Sprintf("WARN: Your description produced an error: %s", err.Error())
+		desc = desc + "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Yellow).Render(errormsg)
+	}
+	return desc
+}
+
 func (m model) stepView() string {
 	_, step, _ := m.executor.CurrentStep()
 
 	if step.MatchedStep.Description == "" {
 		step.MatchedStep.Description = "(no description provided)"
 	}
-	description := sectionStyle.Render("Description") + "\n" + step.MatchedStep.Description
+	description := sectionStyle.Render("Description") + "\n" + m.renderDescription(step.MatchedStep.Description)
 
 	var editNumber int
 
