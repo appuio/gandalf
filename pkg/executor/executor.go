@@ -199,6 +199,7 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Env = os.Environ()
 	outputs := e.StateManager.Outputs()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GANDALF_STEPFILE_DIR=%s", matchedStep.MatchedStep.StepFileDir))
 	for _, input := range matchedStep.MatchedStep.Inputs {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("INPUT_%s=%s", input.Name, outputs[input.Name].Value))
 	}
