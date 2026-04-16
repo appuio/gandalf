@@ -70,6 +70,7 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to find step file %s: %w", stepFilePath, err)
 		}
 		for _, stepFile := range matches {
+			stepDir := filepath.Dir(stepFile)
 			rawStep, err := os.ReadFile(stepFile)
 			if err != nil {
 				return fmt.Errorf("failed to read step file %s: %w", stepFile, err)
@@ -83,6 +84,9 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 			parsedFile := &steps.StepsFile{}
 			if err := json.Unmarshal(jsonBytes, parsedFile); err != nil {
 				return fmt.Errorf("failed to unmarshal step file %s: %w", stepFile, err)
+			}
+			for i := range parsedFile.Steps {
+				parsedFile.Steps[i].StepFileDir = stepDir
 			}
 			collectedSteps = append(collectedSteps, parsedFile.Steps...)
 		}
