@@ -120,9 +120,10 @@ func (sm *StateManager) SetLocal(name, value string) {
 // Outputs returns a copy of the current outputs.
 func (sm *StateManager) Outputs() map[string]Output {
 	result := maps.Clone(sm.state.Outputs)
-	for n, v := range sm.ephState.Locals {
-		result[n] = v
+	if result == nil {
+		result = make(map[string]Output)
 	}
+	maps.Copy(result, sm.ephState.Locals)
 	return result
 }
 
