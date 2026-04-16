@@ -105,7 +105,7 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	executor := &executor.Executor{
 		StateManager: stateManager,
 
-		Matcher:      &matcher,
+		Matcher:     &matcher,
 		ShellRCFile: rcFilePath,
 	}
 

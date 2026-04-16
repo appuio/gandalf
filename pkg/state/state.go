@@ -103,12 +103,12 @@ func (sm *StateManager) SetFinalStep() error {
 }
 
 func (sm *StateManager) SetOutput(name, value string) error {
-	if sm.state.Outputs == nil {
-		sm.state.Outputs = make(map[string]Output)
-	}
 	if sm.varMeta.IsLocal(name) {
 		sm.SetLocal(name, value)
 		return nil
+	}
+	if sm.state.Outputs == nil {
+		sm.state.Outputs = make(map[string]Output)
 	}
 	sm.state.Outputs[name] = Output{Value: value}
 	return sm.sync()

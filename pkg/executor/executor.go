@@ -75,15 +75,13 @@ func (m *Matcher) PreparedSteps() ([]Step, error) {
 }
 
 func (m *Matcher) IsLocal(variable string) bool {
-	t, ok := m.variableTypes[variable]
-	if ok {
+	if t, ok := m.variableTypes[variable]; ok {
 		return t.IsLocal()
 	}
 	return false
 }
 func (m *Matcher) IsSensitive(variable string) bool {
-	t, ok := m.variableTypes[variable]
-	if ok {
+	if t, ok := m.variableTypes[variable]; ok {
 		return t.IsSensitive()
 	}
 	return false
@@ -94,8 +92,7 @@ func (m *Matcher) addVariables(step steps.Step, matchedName string) error {
 		m.variableTypes = make(map[string]steps.VariableType)
 	}
 	for _, input := range step.Inputs {
-		t, ok := m.variableTypes[input.Name]
-		if ok {
+		if t, ok := m.variableTypes[input.Name]; ok {
 			if t != input.Type && !input.Type.IsRegular() {
 				return fmt.Errorf("Variable %s of type %s is re-defined in Step `%s` as type %s", input.Name, t.String(), matchedName, input.Type.String())
 			}
@@ -105,8 +102,7 @@ func (m *Matcher) addVariables(step steps.Step, matchedName string) error {
 		}
 	}
 	for _, output := range step.Outputs {
-		t, ok := m.variableTypes[output.Name]
-		if ok {
+		if t, ok := m.variableTypes[output.Name]; ok {
 			if t != output.Type && !output.Type.IsRegular() {
 				return fmt.Errorf("Variable %s of type %s is re-defined in Step `%s` as type %s", output.Name, t.String(), matchedName, output.Type.String())
 			}
