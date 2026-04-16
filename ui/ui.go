@@ -375,7 +375,7 @@ func (m model) renderDescription(rawDesc string) string {
 		}
 	}
 	if err != nil {
-		errormsg := fmt.Sprintf("WARN: Your description produced an error: %s", err.Error())
+		errormsg := fmt.Sprintf("WARN: Your description produced a template error: %s", err.Error())
 		desc = desc + "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Yellow).Render(errormsg)
 	}
 	return desc
