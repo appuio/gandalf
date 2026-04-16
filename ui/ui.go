@@ -44,7 +44,7 @@ type uiState string
 
 const (
 	uiStateInitializing  uiState = ""
-	uiStateStep          uiState = "step"
+	uiStateSpell         uiState = "spell"
 	uiStateInputOverlay  uiState = "varInputOverlay"
 	uiStateVarSelectMode uiState = "varSelectMode"
 )
@@ -107,7 +107,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// quickly, though asynchronously, which is why we wait for them
 			// here.
 			m.cmdOutputViewport = viewport.New(msg.Width, m.calculateViewportHeight())
-			m.uiState = uiStateStep
+			m.uiState = uiStateSpell
 		}
 	case uiStateInputOverlay:
 		// input overlay takes precedence
@@ -122,7 +122,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.executor.StateManager.SetOutput(m.overlayVarInput.varName, m.overlayVarInput.textInput.Value())
 					m.logger.VariableChange(m.overlayVarInput.varName, m.overlayVarInput.origValue, m.overlayVarInput.textInput.Value())
 				}
-				m.uiState = uiStateStep
+				m.uiState = uiStateSpell
 				m.varSelectIdx = ""
 				m.overlayVarInput.textInput.Blur()
 			}
@@ -135,7 +135,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.varSelectIdx += k
 			}
 			if k == "esc" || k == "e" {
-				m.uiState = uiStateStep
+				m.uiState = uiStateSpell
 				m.varSelectIdx = ""
 			}
 			if k == "enter" && m.varSelectIdx != "" {
@@ -158,7 +158,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-	case uiStateStep:
+	case uiStateSpell:
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			k := msg.String()
@@ -203,11 +203,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case cmdFinished:
 			_, step, _ := m.executor.CurrentStep()
 			inputs := make(map[string]string)
-			for _, input := range step.MatchedStep.Inputs {
+			for _, input := range step.Spell.Inputs {
 				inputs[input.Name] = m.executor.StateManager.Outputs()[input.Name].Value
 			}
 			outputs := make(map[string]string)
-			for _, output := range step.MatchedStep.Outputs {
+			for _, output := range step.Spell.Outputs {
 				outputs[output.Name] = m.executor.StateManager.Outputs()[output.Name].Value
 			}
 			m.logger.CommandFinished(step.Match, inputs, outputs, m.cmdOutput.String(), msg.err)
@@ -217,7 +217,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	{
-		// Step height is dynamic, so we need to update the viewport size after each update.
+		// Spell description height is dynamic, so we need to update the viewport size after each update.
 		// We do it right before updating the viewport to ensure most up-to-date dimensions.
 		if m.uiState != uiStateInitializing {
 			oldW := m.cmdOutputViewport.Width
@@ -294,7 +294,7 @@ func (m model) emptyInputs() []string {
 		return empty
 	}
 	stateOutputs := m.executor.StateManager.Outputs()
-	for _, input := range step.MatchedStep.Inputs {
+	for _, input := range step.Spell.Inputs {
 		if val := stateOutputs[input.Name]; val.Value == "" {
 			empty = append(empty, input.Name)
 		}
@@ -306,9 +306,9 @@ func (m model) openInputOverlay(varName string) (model, tea.Cmd) {
 	var description string
 	_, step, err := m.executor.CurrentStep()
 	if err == nil {
-		for _, input := range step.MatchedStep.Inputs {
+		for _, input := range step.Spell.Inputs {
 			if input.Name == varName {
-				description = m.renderDescription(input.Description)
+				description = m.renderDescription(input.Description, "input_desc")
 				break
 			}
 		}
@@ -380,9 +380,9 @@ func (m model) renderEditSelectorNumber(mp varMapping) string {
 	return base.Render("[") + selected.Render(highlighted) + base.Render(rest) + base.Render("]")
 }
 
-func (m model) renderDescription(rawDesc string) string {
+func (m model) renderDescription(rawDesc string, templateContext string) string {
 	desc := rawDesc
-	t, err := template.New("step_desc").Parse(rawDesc)
+	t, err := template.New(templateContext).Parse(rawDesc)
 	if err == nil {
 		var buf bytes.Buffer
 		err = t.Execute(&buf, m.executor.StateManager.Outputs())
@@ -400,10 +400,10 @@ func (m model) renderDescription(rawDesc string) string {
 func (m model) stepView() string {
 	_, step, _ := m.executor.CurrentStep()
 
-	if step.MatchedStep.Description == "" {
-		step.MatchedStep.Description = "(no description provided)"
+	if step.Spell.Description == "" {
+		step.Spell.Description = "(no description provided)"
 	}
-	description := sectionStyle.Render("Description") + "\n" + m.renderDescription(step.MatchedStep.Description)
+	description := sectionStyle.Render("Description") + "\n" + m.renderDescription(step.Spell.Description, "spell_desc")
 
 	var editNumber int
 
@@ -455,7 +455,7 @@ func (m model) stepView() string {
 	}
 
 	outputs := sectionStyle.Render("Outputs")
-	if len(step.MatchedStep.Outputs) == 0 {
+	if len(step.Spell.Outputs) == 0 {
 		outputs += "\n(none)"
 	} else {
 		for _, output := range outputVars {
@@ -497,7 +497,7 @@ func (m model) footerView() string {
 		help = infoStyleLeft.Render("esc: cancel • enter: save")
 	case uiStateVarSelectMode:
 		help = infoStyleLeft.Render("0-9: select var • e, esc: exit selector • enter: edit variable")
-	case uiStateStep:
+	case uiStateSpell:
 		switch m.cmdState {
 		case cmdStateIdle:
 			if len(m.emptyInputs()) > 0 {
@@ -562,7 +562,7 @@ func (m model) variableMapping(s executor.Step) []varMapping {
 			editable: false,
 		})
 	}
-	for _, input := range s.MatchedStep.Inputs {
+	for _, input := range s.Spell.Inputs {
 		idx++
 		mappings = append(mappings, varMapping{
 			name:     input.Name,
@@ -571,7 +571,7 @@ func (m model) variableMapping(s executor.Step) []varMapping {
 			editable: m.cmdState == cmdStateIdle,
 		})
 	}
-	for _, output := range s.MatchedStep.Outputs {
+	for _, output := range s.Spell.Outputs {
 		idx++
 		mappings = append(mappings, varMapping{
 			name:     output.Name,

@@ -1,4 +1,4 @@
-steps:
+spells:
 - match: Given we choose to go to the moon
   outputs:
   - name: money_allocated

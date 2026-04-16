@@ -38,11 +38,11 @@ func (r *Renderer) Render() error {
 
 	for i, step := range steps {
 		r.write(r.Formatter.AddSectionID(r.Formatter.H2(step.Match), fmt.Sprintf("step-%d", i+1)))
-		r.write(r.Formatter.Text(step.MatchedStep.Description))
+		r.write(r.Formatter.Text(step.Spell.Description))
 
-		if len(step.MatchedStep.Inputs) > 0 {
+		if len(step.Spell.Inputs) > 0 {
 			r.write(r.Formatter.H3("Inputs"))
-			for _, input := range step.MatchedStep.Inputs {
+			for _, input := range step.Spell.Inputs {
 				t := r.Formatter.InlineCode(input.Name)
 				if input.Description != "" {
 					t += ": " + r.Formatter.Text(input.Description)
@@ -52,9 +52,9 @@ func (r *Renderer) Render() error {
 			r.write("\n")
 		}
 
-		if len(step.MatchedStep.Outputs) > 0 {
+		if len(step.Spell.Outputs) > 0 {
 			r.write(r.Formatter.H3("Outputs"))
-			for _, output := range step.MatchedStep.Outputs {
+			for _, output := range step.Spell.Outputs {
 				t := r.Formatter.InlineCode(output.Name)
 				if output.Description != "" {
 					t += ": " + r.Formatter.Text(output.Description)
@@ -64,16 +64,16 @@ func (r *Renderer) Render() error {
 			r.write("\n")
 		}
 
-		if step.MatchedStep.Run != "" {
+		if step.Spell.Run != "" {
 			script := new(strings.Builder)
 
 			script.WriteString("OUTPUT=$(mktemp)\n\n")
-			for _, output := range step.MatchedStep.Inputs {
+			for _, output := range step.Spell.Inputs {
 				script.WriteString(fmt.Sprintf("# export INPUT_%s=\n", output.Name))
 			}
 			script.WriteString("\n")
 
-			script.WriteString(step.MatchedStep.Run)
+			script.WriteString(step.Spell.Run)
 			script.WriteString("\n\n")
 
 			script.WriteString("# echo \"# Outputs\"\n")

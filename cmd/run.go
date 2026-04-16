@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/appuio/gandalf/pkg/executor"
+	"github.com/appuio/gandalf/pkg/spells"
 	"github.com/appuio/gandalf/pkg/state"
-	"github.com/appuio/gandalf/pkg/steps"
 	"github.com/appuio/gandalf/pkg/workflow"
 	"github.com/appuio/gandalf/ui"
 	"github.com/spf13/cobra"
@@ -58,37 +58,37 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to unmarshal workflow: %w", err)
 	}
 
-	collectedSteps := []steps.Step{}
-	for _, stepFilePath := range args[1:] {
-		matches, err := filepath.Glob(stepFilePath)
+	collectedSpells := []spells.Spell{}
+	for _, spellbookPath := range args[1:] {
+		matches, err := filepath.Glob(spellbookPath)
 		if err != nil {
-			return fmt.Errorf("failed to find step file %s: %w", stepFilePath, err)
+			return fmt.Errorf("failed to find spellbook file %s: %w", spellbookPath, err)
 		}
-		for _, stepFile := range matches {
-			stepDir := filepath.Dir(stepFile)
-			rawStep, err := os.ReadFile(stepFile)
+		for _, spellbook := range matches {
+			stepDir := filepath.Dir(spellbook)
+			rawStep, err := os.ReadFile(spellbook)
 			if err != nil {
-				return fmt.Errorf("failed to read step file %s: %w", stepFile, err)
+				return fmt.Errorf("failed to read spellbook file %s: %w", spellbook, err)
 			}
 
 			jsonBytes, err := yaml.YAMLToJSON(rawStep)
 			if err != nil {
-				return fmt.Errorf("failed to convert step file %s from YAML to JSON: %w", stepFile, err)
+				return fmt.Errorf("failed to convert spellbook file %s from YAML to JSON: %w", spellbook, err)
 			}
 
-			parsedFile := &steps.StepsFile{}
+			parsedFile := &spells.Spellbook{}
 			if err := json.Unmarshal(jsonBytes, parsedFile); err != nil {
-				return fmt.Errorf("failed to unmarshal step file %s: %w", stepFile, err)
+				return fmt.Errorf("failed to unmarshal spellbook file %s: %w", spellbook, err)
 			}
-			for i := range parsedFile.Steps {
-				parsedFile.Steps[i].StepFileDir = stepDir
+			for i := range parsedFile.Spells {
+				parsedFile.Spells[i].SpellbookDir = stepDir
 			}
-			collectedSteps = append(collectedSteps, parsedFile.Steps...)
+			collectedSpells = append(collectedSpells, parsedFile.Spells...)
 		}
 	}
 	matcher := &executor.Matcher{
-		Workflow: wf,
-		Steps:    collectedSteps,
+		Workflow:        wf,
+		AvailableSpells: collectedSpells,
 	}
 
 	stateManager, err := state.NewStateManager(ro.StateFile, matcher)
