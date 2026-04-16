@@ -27,6 +27,10 @@ type Output struct {
 	Value string `json:"value"`
 }
 
+func (o Output) String() string {
+	return o.Value
+}
+
 type StateFile struct {
 	// CurrentStep holds the identifier of the step that is currently being executed.
 	CurrentStep string `json:"current_step"`
