@@ -13,6 +13,7 @@ import (
 	"github.com/appuio/gandalf/pkg/workflow"
 	"github.com/appuio/gandalf/ui"
 	"github.com/spf13/cobra"
+	"mvdan.cc/sh/v3/shell"
 	"sigs.k8s.io/yaml"
 )
 
@@ -38,7 +39,7 @@ func NewRunCommand() *cobra.Command {
 		Args:      cobra.MinimumNArgs(2),
 		RunE:      ro.Run,
 	}
-	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", "~/.gandalf/rc", "Path to a shell rc file to source before executing any step scripts.")
+	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", "${XDG_CONFIG_HOME:-~/.config}/gandalf/rc", "Path to a shell rc file to source before executing any step scripts.")
 	c.Flags().StringVar(&ro.StateFile, "statefile", ".gandalf-state.json", "Path to a JSON file to store workflow state. Will be created if it does not exist.")
 	c.Flags().StringVar(&ro.UILogFile, "uilogfile", "ui-log.txt", "Path to a file where all script output displayed in the UI is logged.")
 	return c
@@ -88,6 +89,11 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	rcFilePath, err := shell.Expand(ro.ShellRCFile, nil)
+	if err != nil {
+		return fmt.Errorf("failed to expand shell rc file path: %w", err)
+	}
+
 	executor := &executor.Executor{
 		Matcher: executor.Matcher{
 			Workflow: wf,
@@ -95,7 +101,7 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 		},
 		StateManager: stateManager,
 
-		ShellRCFile: ro.ShellRCFile,
+		ShellRCFile: rcFilePath,
 	}
 
 	if err := executor.Prepare(); err != nil {
