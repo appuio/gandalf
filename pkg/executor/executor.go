@@ -233,8 +233,13 @@ func (c *Cmd) Start() error {
 }
 
 func (c *Cmd) Wait() error {
+	var derr error
+	defer func() {
+		derr = os.RemoveAll(filepath.Dir(c.OutputFile))
+	}()
+
 	if err := c.Cmd.Wait(); err != nil {
-		return fmt.Errorf("failed to wait for command: %w", err)
+		return multierr.Combine(fmt.Errorf("failed to wait for command: %w", err), derr)
 	}
 
 	raw, err := os.ReadFile(c.OutputFile)
@@ -242,7 +247,7 @@ func (c *Cmd) Wait() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("failed to read state file: %w", err)
+		return multierr.Combine(fmt.Errorf("failed to read state file: %w", err), derr)
 	}
 	state := make(map[string]string)
 	for line := range bytes.Lines(raw) {
@@ -252,7 +257,7 @@ func (c *Cmd) Wait() error {
 		}
 		key, value, found := bytes.Cut(line, []byte("="))
 		if !found {
-			return fmt.Errorf("invalid state line: %s", line)
+			return multierr.Combine(fmt.Errorf("invalid state line: %s", line), derr)
 		}
 		state[string(key)] = string(value)
 	}
@@ -265,8 +270,8 @@ func (c *Cmd) Wait() error {
 	}
 
 	if err := multierr.Combine(errors...); err != nil {
-		return fmt.Errorf("failed to save outputs: %w", err)
+		return multierr.Combine(fmt.Errorf("failed to save outputs: %w", err), derr)
 	}
 
-	return os.RemoveAll(filepath.Dir(c.OutputFile))
+	return derr
 }
