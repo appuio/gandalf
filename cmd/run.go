@@ -86,12 +86,12 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 			collectedSteps = append(collectedSteps, parsedFile.Steps...)
 		}
 	}
-	matcher := executor.Matcher{
+	matcher := &executor.Matcher{
 		Workflow: wf,
 		Steps:    collectedSteps,
 	}
 
-	stateManager, err := state.NewStateManager(ro.StateFile, &matcher)
+	stateManager, err := state.NewStateManager(ro.StateFile, matcher)
 	if err != nil {
 		return fmt.Errorf("failed to create state manager: %w", err)
 	}
@@ -105,7 +105,7 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 	executor := &executor.Executor{
 		StateManager: stateManager,
 
-		Matcher:     &matcher,
+		Matcher:     matcher,
 		ShellRCFile: rcFilePath,
 	}
 
@@ -113,7 +113,7 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to prepare executor: %w", err)
 	}
 
-	ui, err := ui.NewUI(executor, &matcher, ro.UILogFile)
+	ui, err := ui.NewUI(executor, ro.UILogFile)
 	if err != nil {
 		return fmt.Errorf("failed to create UI: %w", err)
 	}

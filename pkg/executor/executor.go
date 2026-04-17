@@ -55,7 +55,7 @@ func (m *Matcher) Prepare() error {
 		}
 	}
 	if err := multierr.Combine(errors...); err != nil {
-		return fmt.Errorf("failed to match workflow steps: %w", err)
+		return fmt.Errorf("failed while checking variables: %w", err)
 	}
 	return nil
 }

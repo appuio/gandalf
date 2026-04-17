@@ -41,11 +41,6 @@ var (
 
 type uiState string
 
-type VariableMetadata interface {
-	IsLocal(string) bool
-	IsSensitive(string) bool
-}
-
 const (
 	uiStateInitializing  uiState = ""
 	uiStateStep          uiState = "step"
@@ -61,7 +56,7 @@ const (
 	cmdStateFinished cmdState = "finished"
 )
 
-const sensitiveValueMask = "*** YOU SHALL NOT PEEK ***"
+const sensitiveValueMaskFlavorText = " YOU SHALL NOT PEEK "
 
 type model struct {
 	uiState uiState
@@ -86,8 +81,6 @@ type model struct {
 	program *tea.Program
 
 	logger *log.Logger
-
-	varMeta VariableMetadata
 }
 
 func (m model) Init() tea.Cmd {
@@ -432,11 +425,11 @@ func (m model) stepView() string {
 				if val, ok := stateOutputs[input.name]; ok {
 					color := lipgloss.Magenta
 					text := val.Value
-					if m.varMeta.IsLocal(input.name) {
+					if m.executor.IsLocal(input.name) {
 						color = lipgloss.Yellow
 					}
-					if m.varMeta.IsSensitive(input.name) {
-						text = sensitiveValueMask
+					if m.executor.IsSensitive(input.name) {
+						text = sensitiveValueMask(len(text))
 					}
 					inputView += " " + lipgloss.NewStyle().Foreground(color).Render(text)
 				}
@@ -456,8 +449,8 @@ func (m model) stepView() string {
 			outputs += ("\n- " + output.name)
 			if val, ok := stateOutputs[output.name]; ok {
 				text := val.Value
-				if m.varMeta.IsSensitive(output.name) {
-					text = sensitiveValueMask
+				if m.executor.IsSensitive(output.name) {
+					text = sensitiveValueMask(len(text))
 				}
 				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(text)
 			}
@@ -583,7 +576,7 @@ func max(a, b int) int {
 	return b
 }
 
-func NewUI(exc *executor.Executor, varMeta VariableMetadata, logfile string) (*tea.Program, error) {
+func NewUI(exc *executor.Executor, logfile string) (*tea.Program, error) {
 	l, err := log.NewLogger(logfile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create UI logger: %w", err)
@@ -591,7 +584,6 @@ func NewUI(exc *executor.Executor, varMeta VariableMetadata, logfile string) (*t
 	m := &model{
 		logger:          l,
 		executor:        exc,
-		varMeta:         varMeta,
 		overlayVarInput: newVarInputModel(),
 	}
 	m.spinner = spinner.New()
@@ -635,4 +627,12 @@ func filledLayer(content string, width, height int) *lipgloss.Layer {
 	filled = append(filled, slices.Repeat([]string{emptyLine}, nFillerLines)...)
 
 	return lipgloss.NewLayer(strings.Join(filled, "\n"))
+}
+
+func sensitiveValueMask(length int) string {
+	if length < len(sensitiveValueMaskFlavorText)+2 {
+		return strings.Repeat("*", length)
+	}
+	half := (length - len(sensitiveValueMaskFlavorText)) / 2
+	return fmt.Sprintf("%s%s%s", strings.Repeat("*", half), sensitiveValueMaskFlavorText, strings.Repeat("*", half))
 }
