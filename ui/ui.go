@@ -215,11 +215,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Step height is dynamic, so we need to update the viewport size after each update.
 		// We do it right before updating the viewport to ensure most up-to-date dimensions.
 		if m.uiState != uiStateInitializing {
-			old_w := m.cmdOutputViewport.Width
+			oldW := m.cmdOutputViewport.Width
 			m.cmdOutputViewport.Width = m.width
 			m.cmdOutputViewport.Height = m.calculateViewportHeight()
 			// Whenever the width changes, we also need to update the output that is being displayed, since the line wrapping changes.
-			if old_w != m.width {
+			if oldW != m.width {
 				m.cmdOutputViewport = m.updateCmdOutput(false)
 			}
 		}
