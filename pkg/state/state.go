@@ -121,6 +121,15 @@ func (sm *StateManager) SetLocal(name, value string) {
 	sm.ephState.Locals[name] = Output{Value: value}
 }
 
+func (sm *StateManager) SetOutputFromEnv(name, value string) error {
+	currentOutputs := sm.Outputs()
+	_, ok := currentOutputs[name]
+	if !ok {
+		return sm.SetOutput(name, value)
+	}
+	return nil
+}
+
 // Outputs returns a copy of the current outputs.
 func (sm *StateManager) Outputs() map[string]Output {
 	result := maps.Clone(sm.state.Outputs)
