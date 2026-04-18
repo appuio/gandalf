@@ -8,32 +8,33 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_Json_Basic(t *testing.T) {
+func Test_VariableType_Json_Regular(t *testing.T) {
+	for _, str := range []string{
+		"{\"name\": \"MyVar\"}",
+		"{\"name\": \"MyVar\", \"type\":\"regular\"}",
+		"{\"name\": \"MyVar\", \"type\":\"\"}",
+	} {
+		input := steps.Input{}
 
-	str := []byte("{\"name\": \"MyVar\"}")
+		err := json.Unmarshal([]byte(str), &input)
+		assert.NoError(t, err)
 
-	input := steps.Input{}
+		assert.True(t, input.Type.IsRegular())
+		assert.False(t, input.Type.IsLocal())
+		assert.False(t, input.Type.IsSensitive())
 
-	err := json.Unmarshal(str, &input)
+		nbytes, err := json.Marshal(input)
+		nstr := string(nbytes)
 
-	assert.NoError(t, err)
+		assert.NoError(t, err)
 
-	assert.True(t, input.Type.IsRegular())
-	assert.False(t, input.Type.IsLocal())
-	assert.False(t, input.Type.IsSensitive())
-
-	nbytes, err := json.Marshal(input)
-	nstr := string(nbytes)
-
-	assert.NoError(t, err)
-
-	assert.NotContains(t, nstr, "local")
-	assert.NotContains(t, nstr, "sensitive")
-	assert.NotContains(t, nstr, "regular")
-
+		assert.NotContains(t, nstr, "local")
+		assert.NotContains(t, nstr, "sensitive")
+		assert.NotContains(t, nstr, "regular")
+	}
 }
 
-func Test_Json_Local(t *testing.T) {
+func Test_VariableType_Json_Local(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"local\"}")
 
@@ -58,7 +59,7 @@ func Test_Json_Local(t *testing.T) {
 
 }
 
-func Test_Json_Sensitive(t *testing.T) {
+func Test_VariableType_Json_Sensitive(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"sensitive\"}")
 
@@ -83,7 +84,7 @@ func Test_Json_Sensitive(t *testing.T) {
 
 }
 
-func Test_Json_Both(t *testing.T) {
+func Test_VariableType_Json_Both(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"local-sensitive\"}")
 
@@ -107,7 +108,7 @@ func Test_Json_Both(t *testing.T) {
 
 }
 
-func Test_Json_ParseError(t *testing.T) {
+func Test_VariableType_Json_ParseError(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"invalidtype\"}")
 

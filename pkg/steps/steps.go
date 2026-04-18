@@ -47,17 +47,13 @@ type Step struct {
 }
 
 // VariableType represents type metadata about a certain variable.
-type VariableType struct {
-	key variableEnum
-}
-
-type variableEnum int
+type VariableType int
 
 const (
-	variableTypeRegular        variableEnum = 0b00
-	variableTypeLocal          variableEnum = 0b01
-	variableTypeSensitive      variableEnum = 0b10
-	variableTypeLocalSensitive variableEnum = 0b11
+	variableTypeRegular        VariableType = 0b00
+	variableTypeLocal          VariableType = 0b01
+	variableTypeSensitive      VariableType = 0b10
+	variableTypeLocalSensitive VariableType = 0b11
 )
 
 func (v VariableType) MarshalJSON() ([]byte, error) {
@@ -70,45 +66,44 @@ func (v VariableType) MarshalJSON() ([]byte, error) {
 
 func (v *VariableType) UnmarshalJSON(data []byte) error {
 	var strdata string
-	err := json.Unmarshal(data, &strdata)
-	if err != nil {
+	if err := json.Unmarshal(data, &strdata); err != nil {
 		return fmt.Errorf("error unmarshaling VariableType: %w", err)
 	}
 
 	switch strdata {
 	case "":
-		v.key = variableTypeRegular
+		*v = variableTypeRegular
 		return nil
 	case "regular":
-		v.key = variableTypeRegular
+		*v = variableTypeRegular
 		return nil
 	case "local":
-		v.key = variableTypeLocal
+		*v = variableTypeLocal
 		return nil
 	case "sensitive":
-		v.key = variableTypeSensitive
+		*v = variableTypeSensitive
 		return nil
 	case "local-sensitive":
-		v.key = variableTypeLocalSensitive
+		*v = variableTypeLocalSensitive
 		return nil
 	}
 	return fmt.Errorf("invalid variable type: %s", strdata)
 }
 
 func (v VariableType) IsLocal() bool {
-	return v.key&0b01 > 0
+	return v&0b01 > 0
 }
 
 func (v VariableType) IsSensitive() bool {
-	return v.key&0b10 > 0
+	return v&0b10 > 0
 }
 
 func (v VariableType) IsRegular() bool {
-	return v.key == 0
+	return v == 0
 }
 
 func (v VariableType) String() string {
-	switch v.key {
+	switch v {
 	case variableTypeRegular:
 		return "regular"
 	case variableTypeLocal:
