@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss/v2 v2.0.0-beta.3
+	github.com/muesli/reflow v0.3.0
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.7.0
 	go.uber.org/multierr v1.11.0

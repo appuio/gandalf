@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss/v2"
+	"github.com/muesli/reflow/wrap"
 )
 
 var (
@@ -196,19 +197,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case cmdOutput:
 			m.cmdOutput.Write(msg.data)
-			// Viewport seems to not handle carriage returns well, so we need to process them here.
-			linesWithoutCarriageReturn := []string{}
-			for line := range strings.Lines(m.cmdOutput.String()) {
-				line := strings.TrimRight(line, "\n")
-				parts := strings.Split(line, "\r")
-				nl := make([]rune, len(line))
-				for _, part := range parts {
-					copy(nl[0:], []rune(part))
-				}
-				linesWithoutCarriageReturn = append(linesWithoutCarriageReturn, string(nl))
-			}
-			m.cmdOutputViewport.SetContent(strings.Join(linesWithoutCarriageReturn, "\n"))
-			m.cmdOutputViewport.GotoBottom()
+			m.cmdOutputViewport = m.updateCmdOutput(true)
 		case cmdFinished:
 			_, step, _ := m.executor.CurrentStep()
 			inputs := make(map[string]string)
@@ -229,8 +218,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Step height is dynamic, so we need to update the viewport size after each update.
 		// We do it right before updating the viewport to ensure most up-to-date dimensions.
 		if m.uiState != uiStateInitializing {
+			oldW := m.cmdOutputViewport.Width
 			m.cmdOutputViewport.Width = m.width
 			m.cmdOutputViewport.Height = m.calculateViewportHeight()
+			// Whenever the width changes, we also need to update the output that is being displayed, since the line wrapping changes.
+			if oldW != m.width {
+				m.cmdOutputViewport = m.updateCmdOutput(false)
+			}
 		}
 		var cmd tea.Cmd
 		m.cmdOutputViewport, cmd = m.cmdOutputViewport.Update(msg)
@@ -244,6 +238,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m model) updateCmdOutput(scroll bool) viewport.Model {
+	if m.cmdOutput != nil {
+		linesWithoutCarriageReturn := []string{}
+		for line := range strings.Lines(m.cmdOutput.String()) {
+			line := strings.TrimRight(line, "\n")
+			parts := strings.Split(line, "\r")
+			nl := make([]rune, len(line))
+			for _, part := range parts {
+				copy(nl[0:], []rune(part))
+			}
+			linesWithoutCarriageReturn = append(linesWithoutCarriageReturn, string(nl))
+		}
+		m.cmdOutputViewport.SetContent(wrap.String(strings.Join(linesWithoutCarriageReturn, "\n"), m.width))
+		if scroll {
+			m.cmdOutputViewport.GotoBottom()
+		}
+	}
+	return m.cmdOutputViewport
 }
 
 func (m model) runCmd() (model, tea.Cmd) {
