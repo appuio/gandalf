@@ -57,6 +57,8 @@ const (
 	cmdStateFinished cmdState = "finished"
 )
 
+const sensitiveValueMaskFlavorText = " YOU SHALL NOT PEEK "
+
 type model struct {
 	uiState uiState
 
@@ -435,7 +437,15 @@ func (m model) stepView() string {
 				}
 			case varMappingTypeInput:
 				if val, ok := stateOutputs[input.name]; ok {
-					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Magenta).Render(val.Value)
+					color := lipgloss.Magenta
+					text := val.Value
+					if m.executor.IsLocal(input.name) {
+						color = lipgloss.Yellow
+					}
+					if m.executor.IsSensitive(input.name) {
+						text = sensitiveValueMask(len(text))
+					}
+					inputView += " " + lipgloss.NewStyle().Foreground(color).Render(text)
 				}
 			}
 			if es := m.renderEditSelectorNumber(input); es != "" {
@@ -452,7 +462,11 @@ func (m model) stepView() string {
 			editNumber++
 			outputs += ("\n- " + output.name)
 			if val, ok := stateOutputs[output.name]; ok {
-				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(val.Value)
+				text := val.Value
+				if m.executor.IsSensitive(output.name) {
+					text = sensitiveValueMask(len(text))
+				}
+				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(text)
 			}
 			if es := m.renderEditSelectorNumber(output); es != "" {
 				outputs += " " + es
@@ -627,4 +641,12 @@ func filledLayer(content string, width, height int) *lipgloss.Layer {
 	filled = append(filled, slices.Repeat([]string{emptyLine}, nFillerLines)...)
 
 	return lipgloss.NewLayer(strings.Join(filled, "\n"))
+}
+
+func sensitiveValueMask(length int) string {
+	if length < len(sensitiveValueMaskFlavorText)+2 {
+		return strings.Repeat("*", length)
+	}
+	half := (length - len(sensitiveValueMaskFlavorText)) / 2
+	return fmt.Sprintf("%s%s%s", strings.Repeat("*", half), sensitiveValueMaskFlavorText, strings.Repeat("*", half))
 }

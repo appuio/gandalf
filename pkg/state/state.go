@@ -13,6 +13,10 @@ import (
 // FinalStep is a constant representing the final step in a workflow.
 const FinalStep = "__FINAL_STEP__"
 
+type VariableMetadata interface {
+	IsLocal(string) bool
+}
+
 // Artifact represents a file generated during the execution of a step.
 type Artifact struct {
 	Path string `json:"path"`
@@ -44,21 +48,29 @@ type StateFile struct {
 	Artifacts map[string]Artifact `json:"artifacts"`
 }
 
+type ephemeralState struct {
+	// Locals holds values that are considered local, and are not serialized into the state file.
+	Locals map[string]Output
+}
+
 type StateManager struct {
-	file  *os.File
-	state StateFile
+	file     *os.File
+	state    StateFile
+	ephState ephemeralState
+	varMeta  VariableMetadata
 }
 
 // NewStateManager creates a new StateManager that reads and writes state to the specified file path.
 // If the file does not exist, it will be created.
-func NewStateManager(path string) (*StateManager, error) {
+func NewStateManager(path string, varMeta VariableMetadata) (*StateManager, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open state file %q: %w", path, err)
 	}
 
 	sm := &StateManager{
-		file: f,
+		file:    f,
+		varMeta: varMeta,
 	}
 	if err := sm.load(); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("failed to load state from %q: %w", path, err)
@@ -91,11 +103,22 @@ func (sm *StateManager) SetFinalStep() error {
 }
 
 func (sm *StateManager) SetOutput(name, value string) error {
+	if sm.varMeta.IsLocal(name) {
+		sm.SetLocal(name, value)
+		return nil
+	}
 	if sm.state.Outputs == nil {
 		sm.state.Outputs = make(map[string]Output)
 	}
 	sm.state.Outputs[name] = Output{Value: value}
 	return sm.sync()
+}
+
+func (sm *StateManager) SetLocal(name, value string) {
+	if sm.ephState.Locals == nil {
+		sm.ephState.Locals = make(map[string]Output)
+	}
+	sm.ephState.Locals[name] = Output{Value: value}
 }
 
 func (sm *StateManager) SetOutputFromEnv(name, value string) error {
@@ -109,7 +132,12 @@ func (sm *StateManager) SetOutputFromEnv(name, value string) error {
 
 // Outputs returns a copy of the current outputs.
 func (sm *StateManager) Outputs() map[string]Output {
-	return maps.Clone(sm.state.Outputs)
+	result := maps.Clone(sm.state.Outputs)
+	if result == nil {
+		result = make(map[string]Output)
+	}
+	maps.Copy(result, sm.ephState.Locals)
+	return result
 }
 
 func (sm *StateManager) SetArtifact(name, path string) error {

@@ -27,6 +27,8 @@ type Matcher struct {
 	Steps    []steps.Step
 
 	preparedMatches map[string]Step
+
+	variableTypes map[string]steps.VariableType
 }
 
 func (m *Matcher) Prepare() error {
@@ -45,6 +47,16 @@ func (m *Matcher) Prepare() error {
 	if err := multierr.Combine(errors...); err != nil {
 		return fmt.Errorf("failed to match workflow steps: %w", err)
 	}
+	for _, wfStep := range m.Workflow.Steps {
+		step := m.preparedMatches[wfStep]
+		err := m.addVariables(step.MatchedStep, step.Match)
+		if err != nil {
+			errors = append(errors, err)
+		}
+	}
+	if err := multierr.Combine(errors...); err != nil {
+		return fmt.Errorf("failed while checking variables: %w", err)
+	}
 	return nil
 }
 
@@ -58,7 +70,48 @@ func (m *Matcher) PreparedSteps() ([]Step, error) {
 	for i, wfStep := range m.Workflow.Steps {
 		prepared[i] = m.preparedMatches[wfStep]
 	}
+
 	return prepared, nil
+}
+
+func (m *Matcher) IsLocal(variable string) bool {
+	if t, ok := m.variableTypes[variable]; ok {
+		return t.IsLocal()
+	}
+	return false
+}
+func (m *Matcher) IsSensitive(variable string) bool {
+	if t, ok := m.variableTypes[variable]; ok {
+		return t.IsSensitive()
+	}
+	return false
+}
+
+func (m *Matcher) addVariables(step steps.Step, matchedName string) error {
+	if m.variableTypes == nil {
+		m.variableTypes = make(map[string]steps.VariableType)
+	}
+	for _, input := range step.Inputs {
+		if t, ok := m.variableTypes[input.Name]; ok {
+			if t != input.Type && !input.Type.IsRegular() {
+				return fmt.Errorf("Variable %s of type %s is re-defined in Step `%s` as type %s", input.Name, t.String(), matchedName, input.Type.String())
+			}
+		}
+		if !input.Type.IsRegular() {
+			m.variableTypes[input.Name] = input.Type
+		}
+	}
+	for _, output := range step.Outputs {
+		if t, ok := m.variableTypes[output.Name]; ok {
+			if t != output.Type && !output.Type.IsRegular() {
+				return fmt.Errorf("Variable %s of type %s is re-defined in Step `%s` as type %s", output.Name, t.String(), matchedName, output.Type.String())
+			}
+		}
+		if !output.Type.IsRegular() {
+			m.variableTypes[output.Name] = output.Type
+		}
+	}
+	return nil
 }
 
 func (m *Matcher) matchStep(wfStep string) error {
@@ -96,7 +149,7 @@ func (m *Matcher) matchStep(wfStep string) error {
 }
 
 type Executor struct {
-	Matcher
+	*Matcher
 
 	currentStepIndex int
 
