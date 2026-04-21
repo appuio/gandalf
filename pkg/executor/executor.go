@@ -10,25 +10,25 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/appuio/gandalf/pkg/spells"
 	"github.com/appuio/gandalf/pkg/state"
-	"github.com/appuio/gandalf/pkg/steps"
 	"github.com/appuio/gandalf/pkg/workflow"
 	"go.uber.org/multierr"
 )
 
 type Step struct {
 	Match        string
-	MatchedStep  steps.Step
+	Spell        spells.Spell
 	NamedMatches map[string]string
 }
 
 type Matcher struct {
-	Workflow workflow.Workflow
-	Steps    []steps.Step
+	Workflow        workflow.Workflow
+	AvailableSpells []spells.Spell
 
-	preparedMatches map[string]Step
+	preparedSteps map[string]Step
 
-	variableTypes map[string]steps.VariableType
+	variableTypes map[string]spells.VariableType
 }
 
 func (m *Matcher) Prepare() error {
@@ -36,20 +36,20 @@ func (m *Matcher) Prepare() error {
 		return fmt.Errorf("workflow has no steps")
 	}
 	// Match workflow steps to available steps.
-	m.preparedMatches = make(map[string]Step)
+	m.preparedSteps = make(map[string]Step)
 	var errors []error
-	for _, wfStep := range m.Workflow.Steps {
-		err := m.matchStep(wfStep)
+	for _, step := range m.Workflow.Steps {
+		err := m.matchSpell(step)
 		if err != nil {
 			errors = append(errors, err)
 		}
 	}
 	if err := multierr.Combine(errors...); err != nil {
-		return fmt.Errorf("failed to match workflow steps: %w", err)
+		return fmt.Errorf("failed to match workflow steps to spells: %w", err)
 	}
-	for _, wfStep := range m.Workflow.Steps {
-		step := m.preparedMatches[wfStep]
-		err := m.addVariables(step.MatchedStep, step.Match)
+	for _, step := range m.Workflow.Steps {
+		step := m.preparedSteps[step]
+		err := m.addVariables(step.Spell, step.Match)
 		if err != nil {
 			errors = append(errors, err)
 		}
@@ -63,12 +63,12 @@ func (m *Matcher) Prepare() error {
 // PreparedSteps returns the list of steps matched to the workflow in order.
 // Returns an error if the matcher has not been prepared.
 func (m *Matcher) PreparedSteps() ([]Step, error) {
-	if m.preparedMatches == nil {
+	if m.preparedSteps == nil {
 		return nil, fmt.Errorf("matcher not prepared")
 	}
 	prepared := make([]Step, len(m.Workflow.Steps))
-	for i, wfStep := range m.Workflow.Steps {
-		prepared[i] = m.preparedMatches[wfStep]
+	for i, step := range m.Workflow.Steps {
+		prepared[i] = m.preparedSteps[step]
 	}
 
 	return prepared, nil
@@ -87,24 +87,24 @@ func (m *Matcher) IsSensitive(variable string) bool {
 	return false
 }
 
-func (m *Matcher) addVariables(step steps.Step, matchedName string) error {
+func (m *Matcher) addVariables(spell spells.Spell, matchedName string) error {
 	if m.variableTypes == nil {
-		m.variableTypes = make(map[string]steps.VariableType)
+		m.variableTypes = make(map[string]spells.VariableType)
 	}
-	for _, input := range step.Inputs {
+	for _, input := range spell.Inputs {
 		if t, ok := m.variableTypes[input.Name]; ok {
 			if t != input.Type && !input.Type.IsRegular() {
-				return fmt.Errorf("Variable %s of type %s is re-defined in Step `%s` as type %s", input.Name, t.String(), matchedName, input.Type.String())
+				return fmt.Errorf("Variable %s of type %s is re-defined in spell `%s` as type %s", input.Name, t.String(), matchedName, input.Type.String())
 			}
 		}
 		if !input.Type.IsRegular() {
 			m.variableTypes[input.Name] = input.Type
 		}
 	}
-	for _, output := range step.Outputs {
+	for _, output := range spell.Outputs {
 		if t, ok := m.variableTypes[output.Name]; ok {
 			if t != output.Type && !output.Type.IsRegular() {
-				return fmt.Errorf("Variable %s of type %s is re-defined in Step `%s` as type %s", output.Name, t.String(), matchedName, output.Type.String())
+				return fmt.Errorf("Variable %s of type %s is re-defined in spell `%s` as type %s", output.Name, t.String(), matchedName, output.Type.String())
 			}
 		}
 		if !output.Type.IsRegular() {
@@ -114,36 +114,36 @@ func (m *Matcher) addVariables(step steps.Step, matchedName string) error {
 	return nil
 }
 
-func (m *Matcher) matchStep(wfStep string) error {
-	var matchedSteps []Step
-	for _, step := range m.Steps {
-		if match := step.Match.FindStringSubmatch(wfStep); len(match) > 0 {
+func (m *Matcher) matchSpell(step string) error {
+	var steps []Step
+	for _, spell := range m.AvailableSpells {
+		if match := spell.Match.FindStringSubmatch(step); len(match) > 0 {
 			namedMatches := make(map[string]string)
-			for i, name := range step.Match.SubexpNames() {
+			for i, name := range spell.Match.SubexpNames() {
 				if i != 0 {
 					namedMatches[name] = match[i]
 				}
 			}
-			matchedSteps = append(matchedSteps, Step{
-				Match:        wfStep,
-				MatchedStep:  step,
+			steps = append(steps, Step{
+				Match:        step,
+				Spell:        spell,
 				NamedMatches: namedMatches,
 			})
 		}
 	}
 
-	switch len(matchedSteps) {
+	switch len(steps) {
 	case 0:
-		return fmt.Errorf("unmatched step %q", wfStep)
+		return fmt.Errorf("unmatched step %q", step)
 	case 1:
 		// ok
 	default:
-		return fmt.Errorf("multiple matching steps for %q", wfStep)
+		return fmt.Errorf("multiple matching spells for step %q", step)
 	}
 
-	matchedStep := matchedSteps[0]
+	preparedStep := steps[0]
 
-	m.preparedMatches[wfStep] = matchedStep
+	m.preparedSteps[step] = preparedStep
 
 	return nil
 }
@@ -170,8 +170,8 @@ func (e *Executor) Prepare() error {
 	// Read initial inputs from environment.
 	// Allows users to predefine inputs.
 	// TODO separate from outputs
-	for _, step := range e.Steps {
-		for _, input := range step.Inputs {
+	for _, spell := range e.AvailableSpells {
+		for _, input := range spell.Inputs {
 			if os.Getenv("INPUT_"+input.Name) != "" {
 				err := e.StateManager.SetOutputFromEnv(input.Name, os.Getenv("INPUT_"+input.Name))
 				if err != nil {
@@ -205,14 +205,14 @@ func (e *Executor) Prepare() error {
 	return nil
 }
 
-func (e *Executor) CurrentStep() (i int, matchedStep Step, err error) {
-	currentWFStep := e.Workflow.Steps[e.currentStepIndex]
-	matchedStep, ok := e.preparedMatches[currentWFStep]
+func (e *Executor) CurrentStep() (i int, step Step, err error) {
+	currentStep := e.Workflow.Steps[e.currentStepIndex]
+	step, ok := e.preparedSteps[currentStep]
 	if !ok {
-		return 0, Step{}, fmt.Errorf("step %q not prepared", currentWFStep)
+		return 0, Step{}, fmt.Errorf("step %q not prepared", currentStep)
 	}
 
-	return e.currentStepIndex, matchedStep, nil
+	return e.currentStepIndex, step, nil
 }
 
 func (e *Executor) NextStep() (i int, matchedStep Step, err error) {
@@ -232,12 +232,12 @@ func (e *Executor) NextStep() (i int, matchedStep Step, err error) {
 }
 
 func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
-	_, matchedStep, err := e.CurrentStep()
+	_, step, err := e.CurrentStep()
 	if err != nil {
 		return nil, err
 	}
 
-	script := matchedStep.MatchedStep.Run
+	script := step.Spell.Run
 	if script == "" {
 		script = ":"
 	}
@@ -252,11 +252,11 @@ func (e *Executor) CurrentStepCmd(ctx context.Context) (*Cmd, error) {
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Env = os.Environ()
 	outputs := e.StateManager.Outputs()
-	cmd.Env = append(cmd.Env, fmt.Sprintf("GANDALF_STEPFILE_DIR=%s", matchedStep.MatchedStep.StepFileDir))
-	for _, input := range matchedStep.MatchedStep.Inputs {
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GANDALF_SPELLBOOK_DIR=%s", step.Spell.SpellbookDir))
+	for _, input := range step.Spell.Inputs {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("INPUT_%s=%s", input.Name, outputs[input.Name].Value))
 	}
-	for k, v := range matchedStep.NamedMatches {
+	for k, v := range step.NamedMatches {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("MATCH_%s=%s", k, v))
 	}
 	outputDir, err := os.MkdirTemp(".", "outputs-")

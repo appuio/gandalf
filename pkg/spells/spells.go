@@ -1,4 +1,4 @@
-package steps
+package spells
 
 import (
 	"encoding/json"
@@ -6,8 +6,8 @@ import (
 	"regexp"
 )
 
-type StepsFile struct {
-	Steps []Step `json:"steps"`
+type Spellbook struct {
+	Spells []Spell `json:"spells"`
 }
 
 type InteractionPrompt struct {
@@ -32,7 +32,7 @@ type Output struct {
 	Type        VariableType `json:"type,omitzero"`
 }
 
-type Step struct {
+type Spell struct {
 	Match       regexp.Regexp `json:"match"`
 	Description string        `json:"description"`
 
@@ -43,7 +43,7 @@ type Step struct {
 	Inputs  []Input  `json:"inputs"`
 	Outputs []Output `json:"outputs"`
 
-	StepFileDir string `json:"-"`
+	SpellbookDir string `json:"-"`
 }
 
 // VariableType represents type metadata about a certain variable.

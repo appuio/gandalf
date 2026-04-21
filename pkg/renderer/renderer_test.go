@@ -8,7 +8,7 @@ import (
 
 	"github.com/appuio/gandalf/pkg/executor"
 	"github.com/appuio/gandalf/pkg/renderer"
-	"github.com/appuio/gandalf/pkg/steps"
+	"github.com/appuio/gandalf/pkg/spells"
 	"github.com/appuio/gandalf/pkg/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,12 +53,12 @@ func Test_Renderer(t *testing.T) {
 	assert.NoError(t, err)
 	rawJSONSteps, err := yaml.YAMLToJSON(rawYAMLSteps)
 	assert.NoError(t, err)
-	parsedFile := &steps.StepsFile{}
+	parsedFile := &spells.Spellbook{}
 	require.NoError(t, json.Unmarshal(rawJSONSteps, parsedFile))
 
 	matcher := &executor.Matcher{
-		Workflow: wf,
-		Steps:    parsedFile.Steps,
+		Workflow:        wf,
+		AvailableSpells: parsedFile.Spells,
 	}
 	require.NoError(t, matcher.Prepare())
 
