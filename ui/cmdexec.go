@@ -3,6 +3,7 @@ package ui
 import (
 	"github.com/appuio/gandalf/pkg/executor"
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/sync/errgroup"
 )
 
 type cmdExec struct {
@@ -24,7 +25,9 @@ func (ce *cmdExec) Run() error {
 		return err
 	}
 
-	go func() {
+	var eg errgroup.Group
+
+	eg.Go(func() error {
 		buf := make([]byte, 1024)
 		for {
 			n, err := outR.Read(buf)
@@ -34,11 +37,11 @@ func (ce *cmdExec) Run() error {
 				ce.notifyProg.Send(cmdOutput{data: d, stderr: false})
 			}
 			if err != nil {
-				return
+				return nil
 			}
 		}
-	}()
-	go func() {
+	})
+	eg.Go(func() error {
 		buf := make([]byte, 1024)
 		for {
 			n, err := errR.Read(buf)
@@ -48,12 +51,13 @@ func (ce *cmdExec) Run() error {
 				ce.notifyProg.Send(cmdOutput{data: d, stderr: true})
 			}
 			if err != nil {
-				return
+				return nil
 			}
 		}
-	}()
+	})
+	eg.Go(ce.cmd.Wait)
 
-	return ce.cmd.Wait()
+	return eg.Wait()
 }
 
 type cmdOutput struct {

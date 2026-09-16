@@ -1,6 +1,6 @@
 module github.com/appuio/gandalf
 
-go 1.25.3
+go 1.27
 
 require (
 	github.com/charmbracelet/bubbles v0.21.0
@@ -10,6 +10,7 @@ require (
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.7.0
 	go.uber.org/multierr v1.11.0
+	golang.org/x/sync v0.23.0
 	mvdan.cc/sh/v3 v3.13.1
 	sigs.k8s.io/yaml v1.6.0
 )
