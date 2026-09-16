@@ -423,17 +423,20 @@ func (m model) stepView() string {
 
 	stateOutputs := m.executor.StateManager.Outputs()
 
-	inputView := sectionStyle.Render("Inputs")
+	var inputView strings.Builder
+	inputView.WriteString(sectionStyle.Render("Inputs"))
 	if len(inputVars) == 0 {
-		inputView += "\n(none)"
+		inputView.WriteString("\n(none)")
 	} else {
 		for _, input := range inputVars {
 			editNumber++
-			inputView += ("\n- " + input.name)
+			inputView.WriteString("\n- ")
+			inputView.WriteString(input.name)
 			switch input.typ {
 			case varMappingTypeMatch:
 				if val, ok := step.NamedMatches[input.name]; ok {
-					inputView += " " + lipgloss.NewStyle().Foreground(lipgloss.Blue).Render(val)
+					inputView.WriteString(" ")
+					inputView.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Blue).Render(val))
 				}
 			case varMappingTypeInput:
 				if val, ok := stateOutputs[input.name]; ok {
@@ -445,31 +448,37 @@ func (m model) stepView() string {
 					if m.executor.IsSensitive(input.name) {
 						text = sensitiveValueMask(len(text))
 					}
-					inputView += " " + lipgloss.NewStyle().Foreground(color).Render(text)
+					inputView.WriteString(" ")
+					inputView.WriteString(lipgloss.NewStyle().Foreground(color).Render(text))
 				}
 			}
 			if es := m.renderEditSelectorNumber(input); es != "" {
-				inputView += " " + es
+				inputView.WriteString(" ")
+				inputView.WriteString(es)
 			}
 		}
 	}
 
-	outputs := sectionStyle.Render("Outputs")
+	var outputs strings.Builder
+	outputs.WriteString(sectionStyle.Render("Outputs"))
 	if len(step.Spell.Outputs) == 0 {
-		outputs += "\n(none)"
+		outputs.WriteString("\n(none)")
 	} else {
 		for _, output := range outputVars {
 			editNumber++
-			outputs += ("\n- " + output.name)
+			outputs.WriteString("\n- ")
+			outputs.WriteString(output.name)
 			if val, ok := stateOutputs[output.name]; ok {
 				text := val.Value
 				if m.executor.IsSensitive(output.name) {
 					text = sensitiveValueMask(len(text))
 				}
-				outputs += " " + lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(text)
+				outputs.WriteString(" ")
+				outputs.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Cyan).Render(text))
 			}
 			if es := m.renderEditSelectorNumber(output); es != "" {
-				outputs += " " + es
+				outputs.WriteString(" ")
+				outputs.WriteString(es)
 			}
 		}
 	}
@@ -487,7 +496,7 @@ func (m model) stepView() string {
 	}
 	command = sectionStyle.Render(command)
 
-	return padding1.Render(lipgloss.JoinVertical(lipgloss.Left, description, inputView, outputs, command))
+	return padding1.Render(lipgloss.JoinVertical(lipgloss.Left, description, inputView.String(), outputs.String(), command))
 }
 
 func (m model) footerView() string {
@@ -581,13 +590,6 @@ func (m model) variableMapping(s executor.Step) []varMapping {
 		})
 	}
 	return mappings
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func NewUI(exc *executor.Executor, logfile string) (*tea.Program, error) {
