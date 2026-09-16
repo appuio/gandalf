@@ -1,0 +1,29 @@
+spells:
+- match: Given a Cloudplosion organization
+  outputs:
+  - name: cloudplosion_org_id
+  run: |
+    echo "Please visit this link:"
+    echo "https://vshn.chat/channel/aldebaran?reallylonglinkaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaawhyaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    env -i "cloudplosion_org_id=org-1234567890abcdef" >> "$OUTPUT"
+- match: And all necessary access tokens
+  inputs:
+  - name: gitlab_api_token
+    type: local-sensitive
+  - name: gitlab_user_name
+    type: local
+  - name: cloudplosion_token
+    type: sensitive
+  run: |
+    for i in $(seq 1 2)
+    do
+    echo -n ...
+    sleep 1
+    done
+    echo
+    echo "All access tokens are correct!"
+- match: (?i)And a lieutenant cluster id
+  outputs:
+  - name: cluster_id
+  run: |
+    env -i "cluster_id=c-smouldering-fire-2345" >> "$OUTPUT"
