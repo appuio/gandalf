@@ -41,8 +41,7 @@ func (l *Logger) CommandFinished(cmd string, inputs, outputs map[string]string, 
 	if exitErr == nil {
 		l.logfile.WriteString("EXIT CODE: 0\n")
 	} else {
-		var eerr *exec.ExitError
-		if errors.As(exitErr, &eerr) {
+		if eerr, ok := errors.AsType[*exec.ExitError](exitErr); ok {
 			l.logfile.WriteString("EXIT CODE: " + strconv.Itoa(eerr.ExitCode()) + "\n")
 		} else {
 			l.logfile.WriteString("ERROR: " + exitErr.Error() + "\n")
