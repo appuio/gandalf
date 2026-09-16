@@ -1,0 +1,28 @@
+spells:
+- match: (?:Then |)I upload the kubernetes "(?P<image_name>[^"]+)" image
+  description: This step uploads the kubernetes image to Cloudplosion organization {{ .cloudplosion_org_id }}.
+  inputs:
+  - name: cloudplosion_org_id
+  outputs:
+  - name: image_id
+  run: |
+    echo Uploading image "$MATCH_image_name" to "$INPUT_cloudplosion_org_id" ...
+    sleep 0.7
+    printf .
+    sleep 0.7
+    printf .
+    sleep 0.7
+    printf .
+    sleep 0.7
+    printf .
+    sleep 0.7
+    printf .
+    sleep 0.7
+    printf .
+    sleep 0.7
+    printf .
+    sleep 0.7
+    printf .
+    echo
+    echo Uploaded image with ID "img-1234567890abcdef"
+    env -i "image_id=img-1234567890abcdef" >> "$OUTPUT"
