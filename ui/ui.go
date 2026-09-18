@@ -111,12 +111,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case uiStateInputOverlay:
 		// input overlay takes precedence
+		var cmd tea.Cmd
+		m.overlayVarInput, cmd = m.overlayVarInput.Update(msg)
+		cmds = append(cmds, cmd)
+
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
-			var cmd tea.Cmd
-			m.overlayVarInput, cmd = m.overlayVarInput.Update(msg)
-			cmds = append(cmds, cmd)
-
 			if k := msg.String(); k == "esc" || k == "enter" {
 				if k == "enter" {
 					m.executor.StateManager.SetOutput(m.overlayVarInput.varName, m.overlayVarInput.textInput.Value())
