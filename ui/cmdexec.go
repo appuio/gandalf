@@ -3,8 +3,8 @@ package ui
 import (
 	"sync"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/appuio/gandalf/pkg/executor"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type cmdExec struct {
