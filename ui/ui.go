@@ -347,6 +347,7 @@ func (m model) View() tea.View {
 	}
 	v := tea.NewView(render())
 	v.AltScreen = true
+	v.WindowTitle = m.windowTitle()
 	return v
 }
 
@@ -355,6 +356,12 @@ func (m model) calculateViewportHeight() int {
 	footerHeight := lipgloss.Height(m.footerView())
 	verticalMarginHeight := headerHeight + footerHeight
 	return max(3, m.height-verticalMarginHeight)
+}
+
+func (m model) windowTitle() string {
+	ci, step, _ := m.executor.CurrentStep()
+
+	return fmt.Sprintf("🧙 %s (%d/%d)", step.Match, ci+1, len(m.executor.Workflow.Steps))
 }
 
 func (m model) headerView() string {
