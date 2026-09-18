@@ -340,7 +340,7 @@ func (m model) View() tea.View {
 			overlayLayer := lipgloss.NewLayer(
 				lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2).Width(m.width - 12).Height(m.height - 8).Render(m.overlayVarInput.View()),
 			)
-			return lipgloss.NewCompositor(filledLayer(baseLayer(), m.width, m.height), overlayLayer.X(6).Y(4)).Render()
+			return lipgloss.NewCompositor(lipgloss.NewLayer(baseLayer()), overlayLayer.X(6).Y(4)).Render()
 		default:
 			return baseLayer()
 		}
@@ -614,35 +614,6 @@ func NewUI(exc *executor.Executor, logfile string) (*tea.Program, error) {
 	m.program = p
 
 	return p, nil
-}
-
-const nbsp = '\u00A0'
-
-// filledLayer returns a lipgloss Layer with the given content, padded with
-// spaces to fill the given width and height.
-// At the end of each line, regular spaces are replaced with non-breaking spaces
-// to prevent lipgloss from trimming them.
-// There is a bug currently not rendering overlays correctly when the base layer
-// has lines of varying lengths.
-func filledLayer(content string, width, height int) *lipgloss.Layer {
-	filled := []string{}
-	for line := range strings.Lines(content) {
-		line := strings.TrimRight(line, "\n")
-		if lipgloss.Width(line) < width {
-			line += strings.Repeat(" ", width-lipgloss.Width(line))
-		}
-		if rline := []rune(line); rline[len(rline)-1] == ' ' {
-			rline[len(rline)-1] = nbsp
-			line = string(rline)
-		}
-
-		filled = append(filled, line)
-	}
-	nFillerLines := max(0, height-len(filled))
-	emptyLine := strings.Repeat(" ", width-1) + string(nbsp)
-	filled = append(filled, slices.Repeat([]string{emptyLine}, nFillerLines)...)
-
-	return lipgloss.NewLayer(strings.Join(filled, "\n"))
 }
 
 func sensitiveValueMask(length int) string {
