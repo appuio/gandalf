@@ -116,7 +116,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 		switch msg := msg.(type) {
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			if k := msg.String(); k == "esc" || k == "enter" {
 				if k == "enter" {
 					m.executor.StateManager.SetOutput(m.overlayVarInput.varName, m.overlayVarInput.textInput.Value())
@@ -129,7 +129,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case uiStateVarSelectMode:
 		switch msg := msg.(type) {
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			k := msg.String()
 			if len(k) == 1 && k[0] >= '0' && k[0] <= '9' {
 				m.varSelectIdx += k
@@ -160,7 +160,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case uiStateSpell:
 		switch msg := msg.(type) {
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			k := msg.String()
 
 			if k == "ctrl+c" || k == "q" {
