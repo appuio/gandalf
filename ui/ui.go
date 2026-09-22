@@ -11,12 +11,12 @@ import (
 	"strings"
 	"text/template"
 
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/appuio/gandalf/pkg/executor"
 	"github.com/appuio/gandalf/pkg/log"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/muesli/reflow/wrap"
 )
 
@@ -106,17 +106,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// we can initialize the viewport. The initial dimensions come in
 			// quickly, though asynchronously, which is why we wait for them
 			// here.
-			m.cmdOutputViewport = viewport.New(msg.Width, m.calculateViewportHeight())
+			m.cmdOutputViewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(m.calculateViewportHeight()))
 			m.uiState = uiStateSpell
 		}
 	case uiStateInputOverlay:
 		// input overlay takes precedence
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			var cmd tea.Cmd
-			m.overlayVarInput, cmd = m.overlayVarInput.Update(msg)
-			cmds = append(cmds, cmd)
+		var cmd tea.Cmd
+		m.overlayVarInput, cmd = m.overlayVarInput.Update(msg)
+		cmds = append(cmds, cmd)
 
+		switch msg := msg.(type) {
+		case tea.KeyPressMsg:
 			if k := msg.String(); k == "esc" || k == "enter" {
 				if k == "enter" {
 					m.executor.StateManager.SetOutput(m.overlayVarInput.varName, m.overlayVarInput.textInput.Value())
@@ -129,7 +129,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case uiStateVarSelectMode:
 		switch msg := msg.(type) {
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			k := msg.String()
 			if len(k) == 1 && k[0] >= '0' && k[0] <= '9' {
 				m.varSelectIdx += k
@@ -160,7 +160,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case uiStateSpell:
 		switch msg := msg.(type) {
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			k := msg.String()
 
 			if k == "ctrl+c" || k == "q" {
@@ -220,9 +220,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Spell description height is dynamic, so we need to update the viewport size after each update.
 		// We do it right before updating the viewport to ensure most up-to-date dimensions.
 		if m.uiState != uiStateInitializing {
-			oldW := m.cmdOutputViewport.Width
-			m.cmdOutputViewport.Width = m.width
-			m.cmdOutputViewport.Height = m.calculateViewportHeight()
+			oldW := m.cmdOutputViewport.Width()
+			m.cmdOutputViewport.SetWidth(m.width)
+			m.cmdOutputViewport.SetHeight(m.calculateViewportHeight())
 			// Whenever the width changes, we also need to update the output that is being displayed, since the line wrapping changes.
 			if oldW != m.width {
 				m.cmdOutputViewport = m.updateCmdOutput(false)
@@ -326,23 +326,29 @@ func (m model) quit() (model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m model) View() string {
-	baseLayer := func() string {
-		return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.stepView(), m.cmdOutputViewport.View(), m.footerView())
-	}
+func (m model) View() tea.View {
+	render := func() string {
+		baseLayer := func() string {
+			return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.stepView(), m.cmdOutputViewport.View(), m.footerView())
+		}
 
-	switch m.uiState {
-	case uiStateInitializing:
-		return "\n  Initializing..."
-	case uiStateInputOverlay:
-		// Compose overlay on top of base layer
-		overlayLayer := lipgloss.NewLayer(
-			lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2).Width(m.width - 12).Height(m.height - 8).Render(m.overlayVarInput.View()),
-		)
-		return lipgloss.NewCanvas(filledLayer(baseLayer(), m.width, m.height), overlayLayer.X(6).Y(4)).Render()
-	default:
-		return baseLayer()
+		switch m.uiState {
+		case uiStateInitializing:
+			return "\n  Initializing..."
+		case uiStateInputOverlay:
+			// Compose overlay on top of base layer
+			overlayLayer := lipgloss.NewLayer(
+				lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2).Width(m.width - 12).Height(m.height - 8).Render(m.overlayVarInput.View()),
+			)
+			return lipgloss.NewCompositor(lipgloss.NewLayer(baseLayer()), overlayLayer.X(6).Y(4)).Render()
+		default:
+			return baseLayer()
+		}
 	}
+	v := tea.NewView(render())
+	v.AltScreen = true
+	v.WindowTitle = m.windowTitle()
+	return v
 }
 
 func (m model) calculateViewportHeight() int {
@@ -350,6 +356,12 @@ func (m model) calculateViewportHeight() int {
 	footerHeight := lipgloss.Height(m.footerView())
 	verticalMarginHeight := headerHeight + footerHeight
 	return max(3, m.height-verticalMarginHeight)
+}
+
+func (m model) windowTitle() string {
+	ci, step, _ := m.executor.CurrentStep()
+
+	return fmt.Sprintf("🧙 %s (%d/%d)", step.Match, ci+1, len(m.executor.Workflow.Steps))
 }
 
 func (m model) headerView() string {
@@ -604,45 +616,11 @@ func NewUI(exc *executor.Executor, logfile string) (*tea.Program, error) {
 	}
 	m.spinner = spinner.New()
 	m.spinner.Spinner = spinner.Globe
-	p := tea.NewProgram(
-		m,
-		tea.WithAltScreen(), // use the full size of the terminal in its "alternate screen buffer"
-		// Disabling the mouse support allows the clickable links in the output to work on MacOS Terminal.app
-		// tea.WithMouseCellMotion(), // turn on mouse support so we can track the mouse wheel
-	)
+	p := tea.NewProgram(m)
 	// Used to send async IO updates from cmdExec to the UI
 	m.program = p
 
 	return p, nil
-}
-
-const nbsp = '\u00A0'
-
-// filledLayer returns a lipgloss Layer with the given content, padded with
-// spaces to fill the given width and height.
-// At the end of each line, regular spaces are replaced with non-breaking spaces
-// to prevent lipgloss from trimming them.
-// There is a bug currently not rendering overlays correctly when the base layer
-// has lines of varying lengths.
-func filledLayer(content string, width, height int) *lipgloss.Layer {
-	filled := []string{}
-	for line := range strings.Lines(content) {
-		line := strings.TrimRight(line, "\n")
-		if lipgloss.Width(line) < width {
-			line += strings.Repeat(" ", width-lipgloss.Width(line))
-		}
-		if rline := []rune(line); rline[len(rline)-1] == ' ' {
-			rline[len(rline)-1] = nbsp
-			line = string(rline)
-		}
-
-		filled = append(filled, line)
-	}
-	nFillerLines := max(0, height-len(filled))
-	emptyLine := strings.Repeat(" ", width-1) + string(nbsp)
-	filled = append(filled, slices.Repeat([]string{emptyLine}, nFillerLines)...)
-
-	return lipgloss.NewLayer(strings.Join(filled, "\n"))
 }
 
 func sensitiveValueMask(length int) string {
