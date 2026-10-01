@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 type Spellbook struct {
@@ -33,8 +34,8 @@ type Output struct {
 }
 
 type Spell struct {
-	Match       regexp.Regexp `json:"match"`
-	Description string        `json:"description"`
+	Match       AnchoredRegexp `json:"match"`
+	Description string         `json:"description"`
 
 	Run string `json:"run"`
 
@@ -44,6 +45,44 @@ type Spell struct {
 	Outputs []Output `json:"outputs"`
 
 	SpellbookDir string `json:"-"`
+}
+
+// AnchoredRegexp represents an anchored regex pattern
+//
+// The parser inject anchors and sets field `anchored` to `true` when parsing
+// patterns that contain neither a start or end anchor.
+type AnchoredRegexp struct {
+	regexp.Regexp
+	anchored bool
+}
+
+func (v AnchoredRegexp) MarshalJSON() ([]byte, error) {
+	pat := v.String()
+	if v.anchored {
+		pat = pat[1 : len(pat)-1]
+	}
+	return json.Marshal(pat)
+}
+
+func (v *AnchoredRegexp) UnmarshalJSON(data []byte) error {
+	var pat string
+	if err := json.Unmarshal(data, &pat); err != nil {
+		return fmt.Errorf("error unmarshaling match pattern: %w", err)
+	}
+
+	var r strings.Builder
+	if !strings.HasPrefix(pat, "^") && !strings.HasSuffix(pat, "$") {
+		r.WriteString("^")
+		r.WriteString(pat)
+		r.WriteString("$")
+		v.anchored = true
+	} else {
+		r.WriteString(pat)
+	}
+
+	compiled, err := regexp.Compile(r.String())
+	v.Regexp = *compiled
+	return err
 }
 
 // VariableType represents type metadata about a certain variable.
