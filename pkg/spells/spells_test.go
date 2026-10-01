@@ -1,10 +1,9 @@
-package spells_test
+package spells
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/appuio/gandalf/pkg/spells"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -14,7 +13,7 @@ func Test_VariableType_Json_Regular(t *testing.T) {
 		"{\"name\": \"MyVar\", \"type\":\"regular\"}",
 		"{\"name\": \"MyVar\", \"type\":\"\"}",
 	} {
-		input := spells.Input{}
+		input := Input{}
 
 		err := json.Unmarshal([]byte(str), &input)
 		assert.NoError(t, err)
@@ -38,7 +37,7 @@ func Test_VariableType_Json_Local(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"local\"}")
 
-	input := spells.Input{}
+	input := Input{}
 
 	err := json.Unmarshal(str, &input)
 
@@ -63,7 +62,7 @@ func Test_VariableType_Json_Sensitive(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"sensitive\"}")
 
-	input := spells.Input{}
+	input := Input{}
 
 	err := json.Unmarshal(str, &input)
 
@@ -88,7 +87,7 @@ func Test_VariableType_Json_Both(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"local-sensitive\"}")
 
-	input := spells.Input{}
+	input := Input{}
 
 	err := json.Unmarshal(str, &input)
 
@@ -112,7 +111,7 @@ func Test_VariableType_Json_ParseError(t *testing.T) {
 
 	str := []byte("{\"name\": \"MyVar\", \"type\":\"invalidtype\"}")
 
-	input := spells.Input{}
+	input := Input{}
 
 	err := json.Unmarshal(str, &input)
 
