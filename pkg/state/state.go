@@ -62,10 +62,14 @@ type StateManager struct {
 
 // NewStateManager creates a new StateManager that reads and writes state to the specified file path.
 // If the file does not exist, it will be created.
-func NewStateManager(path string, varMeta VariableMetadata) (*StateManager, error) {
+func NewStateManager(path, userpath string, varMeta VariableMetadata) (*StateManager, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open state file %q: %w", path, err)
+	}
+	user, err := os.OpenFile(userpath, os.O_RDONLY, 0)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to open user state file %q: %w", path, err)
 	}
 
 	sm := &StateManager{
@@ -74,6 +78,11 @@ func NewStateManager(path string, varMeta VariableMetadata) (*StateManager, erro
 	}
 	if err := sm.load(); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("failed to load state from %q: %w", path, err)
+	}
+	if user != nil {
+		if err := sm.loadEphemeral(user); err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("failed to populate ephemeral state from %q: %w", userpath, err)
+		}
 	}
 	return sm, nil
 }
@@ -159,6 +168,20 @@ func (sm *StateManager) load() error {
 	}
 	if err := json.UnmarshalDecode(jsontext.NewDecoder(sm.file), &sm.state); err != nil {
 		return fmt.Errorf("failed to decode state file %q: %w", sm.file.Name(), err)
+	}
+	return nil
+}
+
+func (sm *StateManager) loadEphemeral(f *os.File) error {
+	if _, err := f.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek in state file %q: %w", f.Name(), err)
+	}
+	est := StateFile{}
+	if err := json.UnmarshalDecode(jsontext.NewDecoder(f), &est); err != nil {
+		return fmt.Errorf("failed to decode state file %q: %w", f.Name(), err)
+	}
+	for k, v := range est.Outputs {
+		sm.SetLocal(k, v.Value)
 	}
 	return nil
 }
