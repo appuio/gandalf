@@ -24,8 +24,10 @@ func init() {
 type runOptions struct {
 	// ShellRCFile is an optional path to a shell rc file to source before executing any step scripts.
 	ShellRCFile string
-	StateFile   string
-	UILogFile   string
+	// UserState is an optional path to a state file that's loaded into ephemeral state before asking the user for any inputs.
+	UserStateFile string
+	StateFile     string
+	UILogFile     string
 }
 
 func NewRunCommand() *cobra.Command {
@@ -39,7 +41,16 @@ func NewRunCommand() *cobra.Command {
 		Args:      cobra.MinimumNArgs(2),
 		RunE:      ro.Run,
 	}
-	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", "${XDG_CONFIG_HOME:-~/.config}/gandalf/rc", "Path to a shell rc file to source before executing any step scripts.")
+	userconfigdir, err := os.UserConfigDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to determine user config dir: %v", err)
+		return nil
+	}
+	rcdefault := filepath.Join(userconfigdir, "gandalf/rc")
+	userstatedefault := filepath.Join(userconfigdir, "gandalf/user.json")
+
+	c.Flags().StringVar(&ro.ShellRCFile, "rcfile", rcdefault, "Path to a shell rc file to source before executing any step scripts.")
+	c.Flags().StringVar(&ro.UserStateFile, "userstatefile", userstatedefault, "Path to a state file to load into the ephemeral (local) state before running any steps. Expected to have Gandalf statefile shape.")
 	c.Flags().StringVar(&ro.StateFile, "statefile", ".gandalf-state.json", "Path to a JSON file to store workflow state. Will be created if it does not exist.")
 	c.Flags().StringVar(&ro.UILogFile, "uilogfile", "ui-log.txt", "Path to a file where all script output displayed in the UI is logged.")
 	return c
@@ -91,7 +102,7 @@ func (ro *runOptions) Run(cmd *cobra.Command, args []string) error {
 		AvailableSpells: collectedSpells,
 	}
 
-	stateManager, err := state.NewStateManager(ro.StateFile, matcher)
+	stateManager, err := state.NewStateManager(ro.StateFile, ro.UserStateFile, matcher)
 	if err != nil {
 		return fmt.Errorf("failed to create state manager: %w", err)
 	}
